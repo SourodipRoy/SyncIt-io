@@ -54,19 +54,20 @@ function fmtTime(s) {
 }
 
 // Presence UI
-function updatePresence(list, host) {
-  hostLabel.textContent = host ? host.slice(0, 8) : "—";
-  clientsLabel.textContent = (list || []).map(id => id.slice(0, 6)).join(", ") || "—";
+function updatePresence(list, host, usernames = {}) {
+  hostLabel.textContent = host ? (usernames[host] || host.slice(0, 8)) : "—";
+  clientsLabel.textContent = (list || []).map(id => usernames[id] || id.slice(0, 6)).join(", ") || "—";
   // update selects, exclude self
   transferSelect.innerHTML = "";
   kickSelect.innerHTML = "";
   (list || []).forEach(id => {
     if (id !== clientId) {
+      const displayName = usernames[id] || id.slice(0, 8);
       const opt1 = document.createElement("option");
-      opt1.value = id; opt1.text = id.slice(0, 8);
+      opt1.value = id; opt1.text = displayName;
       transferSelect.appendChild(opt1);
       const opt2 = document.createElement("option");
-      opt2.value = id; opt2.text = id.slice(0, 8);
+      opt2.value = id; opt2.text = displayName;
       kickSelect.appendChild(opt2);
     }
   });
@@ -205,10 +206,47 @@ localMute.onclick = () => {
 
 // Room create/join
 $("createBtn").onclick = () => {
-  ws.send(JSON.stringify({ type: "room:create", roomId: $("roomId").value, pin: $("pin").value || null }));
+  const username = $("username").value.trim();
+  const roomId = $("roomId").value.trim();
+  
+  if (!username) {
+    alert("Please enter a username");
+    return;
+  }
+  
+  if (!roomId || !/^\d{6}$/.test(roomId)) {
+    alert("Room ID must be exactly 6 digits");
+    return;
+  }
+  
+  ws.send(JSON.stringify({ 
+    type: "room:create", 
+    roomId: roomId, 
+    pin: $("pin").value || null,
+    username: username
+  }));
 };
+
 $("joinBtn").onclick = () => {
-  ws.send(JSON.stringify({ type: "room:join", roomId: $("roomId").value, pin: $("pin").value || null }));
+  const username = $("username").value.trim();
+  const roomId = $("roomId").value.trim();
+  
+  if (!username) {
+    alert("Please enter a username");
+    return;
+  }
+  
+  if (!roomId || !/^\d{6}$/.test(roomId)) {
+    alert("Room ID must be exactly 6 digits");
+    return;
+  }
+  
+  ws.send(JSON.stringify({ 
+    type: "room:join", 
+    roomId: roomId, 
+    pin: $("pin").value || null,
+    username: username
+  }));
 };
 
 transferBtn.onclick = () => {
@@ -248,7 +286,7 @@ ws.onmessage = async (ev) => {
     roomId = msg.roomId; isHost = msg.host === true;
     hostId = msg.hostId || null;
     roomLabel.textContent = roomId;
-    updatePresence(msg.clients, msg.hostId);
+    updatePresence(msg.clients, msg.hostId, msg.usernames || {});
     if (isHost) {
       hostPanel.classList.remove("hidden");
       logChat(`Joined ${roomId} as HOST.`);
@@ -258,7 +296,7 @@ ws.onmessage = async (ev) => {
     }
   }
   else if (msg.type === "presence:update") {
-    updatePresence(msg.clients, msg.hostId);
+    updatePresence(msg.clients, msg.hostId, msg.usernames || {});
     hostId = msg.hostId;
   }
   else if (msg.type === "webrtc:new-peer") {
@@ -328,7 +366,7 @@ ws.onmessage = async (ev) => {
     logChat(`[system] ${msg.text}`);
   }
   else if (msg.type === "chat:new") {
-    logChat(`${msg.from}: ${msg.text}`);
+    logChat(`${msg.fromName || msg.from}: ${msg.text}`);
   }
   else if (msg.type === "pong") {
     const ms = Date.now() - msg.t;
