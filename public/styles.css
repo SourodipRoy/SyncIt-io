@@ -1,0 +1,12 @@
+body { font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif; margin: 0; background: #0b1020; color: #eaeef7; }
+.container { max-width: 900px; margin: 2rem auto; padding: 1rem; }
+h1, h2 { margin: 0 0 0.75rem 0; }
+section { background: #111834; border: 1px solid #1b2448; border-radius: 12px; padding: 1rem; margin-bottom: 1rem; box-shadow: 0 4px 16px rgba(0,0,0,0.25); }
+.row { display: flex; gap: 0.5rem; align-items: center; margin: 0.5rem 0; flex-wrap: wrap; }
+input, select, button { padding: 0.5rem 0.75rem; border-radius: 8px; border: 1px solid #2b366d; background: #0e1440; color: #eaeef7; }
+button { cursor: pointer; background: #23307a; border-color: #23307a; }
+button:hover { background: #2b3990; }
+.hidden { display: none; }
+.chat-box { height: 180px; overflow: auto; background: #0e1440; border: 1px solid #2b366d; padding: 0.5rem; border-radius: 8px; }
+.chat-line { margin: 0.25rem 0; }
+#remoteAudio, #audio { width: 100%; }

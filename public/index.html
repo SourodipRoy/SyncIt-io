@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Real-time Multi-Speaker Room</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="./styles.css" />
+</head>
+<body>
+  <div class="container">
+    <h1>Real-time Music Room</h1>
+
+    <section class="room">
+      <input id="roomId" placeholder="Room ID (e.g. alpha123)" />
+      <input id="pin" placeholder="Optional PIN" />
+      <button id="createBtn">Create as Host</button>
+      <button id="joinBtn">Join Room</button>
+      <span id="me"></span>
+    </section>
+
+    <section class="host-panel hidden" id="hostPanel">
+      <h2>Host Controls</h2>
+      <div class="row">
+        <input type="file" id="fileInput" accept="audio/*" />
+        <button id="playBtn">Play</button>
+        <button id="pauseBtn">Pause</button>
+        <button id="stopBtn">Stop</button>
+      </div>
+      <div class="row">
+        <input type="range" id="seek" min="0" max="100" value="0" />
+        <span id="curTime">0:00</span> / <span id="dur">0:00</span>
+      </div>
+      <div class="row">
+        <label>Volume</label>
+        <input type="range" id="volume" min="0" max="1" step="0.01" value="1" />
+        <button id="muteBtn">Mute/Unmute</button>
+      </div>
+      <div class="row">
+        <label>Transfer host to</label>
+        <select id="transferSelect"></select>
+        <button id="transferBtn">Transfer</button>
+      </div>
+      <div class="row">
+        <label>Kick</label>
+        <select id="kickSelect"></select>
+        <button id="kickBtn">Kick</button>
+      </div>
+      <audio id="audio" crossorigin="anonymous" controls class="hidden"></audio>
+    </section>
+
+    <section class="status">
+      <h2>Room Status</h2>
+      <div>Room: <span id="roomLabel">—</span></div>
+      <div>Host: <span id="hostLabel">—</span></div>
+      <div>Clients: <span id="clients"></span></div>
+      <div>RTT: <span id="rtt">—</span> ms</div>
+    </section>
+
+    <section class="chat">
+      <h2>Chat</h2>
+      <div id="chatBox" class="chat-box"></div>
+      <div class="row">
+        <input id="chatInput" placeholder="Type a message..." />
+        <button id="chatSend">Send</button>
+      </div>
+    </section>
+
+    <section class="listener">
+      <h2>Listener</h2>
+      <div>
+        <audio id="remoteAudio" autoplay playsinline></audio>
+      </div>
+      <div class="row">
+        <label>Local volume</label>
+        <input type="range" id="localVol" min="0" max="1" step="0.01" value="1" />
+        <button id="localMute">Mute/Unmute</button>
+      </div>
+    </section>
+  </div>
+
+  <script src="./client.js"></script>
+</body>
+</html>

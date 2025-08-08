@@ -1,15 +1,16 @@
 {
-  "name": "nodejs",
+  "name": "realtime-multi-speaker",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "description": "Low-latency music room with host broadcasting via WebRTC and room controls",
+  "main": "server.js",
+  "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node server.js",
+    "dev": "NODE_ENV=development node server.js"
   },
-  "keywords": [],
-  "author": "",
-  "license": "ISC",
   "dependencies": {
-    "@types/node": "^22.13.11"
+    "express": "^4.19.2",
+    "uuid": "^9.0.1",
+    "ws": "^8.18.0"
   }
 }
