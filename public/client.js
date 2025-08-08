@@ -207,17 +207,14 @@ localMute.onclick = () => {
 // Room create/join
 $("createBtn").onclick = () => {
   const username = $("username").value.trim();
-  const roomId = $("roomId").value.trim();
   
   if (!username) {
     alert("Please enter a username");
     return;
   }
   
-  if (!roomId || !/^\d{6}$/.test(roomId)) {
-    alert("Room ID must be exactly 6 digits");
-    return;
-  }
+  // Auto-generate 6-digit room ID
+  const roomId = Math.floor(100000 + Math.random() * 900000).toString();
   
   ws.send(JSON.stringify({ 
     type: "room:create", 
@@ -249,6 +246,15 @@ $("joinBtn").onclick = () => {
   }));
 };
 
+// Show room ID input when joining
+$("joinBtn").addEventListener("mouseenter", () => {
+  $("roomId").style.display = "block";
+});
+
+$("createBtn").addEventListener("mouseenter", () => {
+  $("roomId").style.display = "none";
+});
+
 transferBtn.onclick = () => {
   const targetId = transferSelect.value;
   if (targetId) ws.send(JSON.stringify({ type: "host:transfer", targetId }));
@@ -270,7 +276,7 @@ ws.onmessage = async (ev) => {
   const msg = JSON.parse(ev.data);
   if (msg.type === "hello") {
     clientId = msg.clientId;
-    me.textContent = `You: ${clientId.slice(0, 8)}`;
+    me.textContent = "";
     pingLoop();
   }
   else if (msg.type === "error") {
