@@ -85,27 +85,29 @@ async function ensureHostStream() {
   
   const newStream = audioEl.captureStream();
   
-  // If we have existing peer connections, update their tracks
-  if (stream && peers.size > 0) {
+  // Always update tracks for existing connections
+  if (peers.size > 0) {
     const newAudioTrack = newStream.getAudioTracks()[0];
-    const oldAudioTrack = stream.getAudioTracks()[0];
     
-    if (newAudioTrack && oldAudioTrack) {
+    if (newAudioTrack) {
       // Replace tracks in existing peer connections
       for (const [peerId, peerData] of peers) {
-        const senders = peerData.pc.getSenders();
-        const audioSender = senders.find(sender => 
-          sender.track && sender.track.kind === 'audio'
-        );
-        
-        if (audioSender) {
-          try {
+        try {
+          const senders = peerData.pc.getSenders();
+          const audioSender = senders.find(sender => 
+            sender.track && sender.track.kind === 'audio'
+          );
+          
+          if (audioSender) {
             await audioSender.replaceTrack(newAudioTrack);
-          } catch (e) {
-            console.warn(`Failed to replace track for peer ${peerId}:`, e);
-            // If replace fails, recreate the connection
-            await hostRecreatePeerConnection(peerId, newStream);
+          } else {
+            // No audio sender found, add the track
+            peerData.pc.addTrack(newAudioTrack, newStream);
           }
+        } catch (e) {
+          console.warn(`Failed to update track for peer ${peerId}:`, e);
+          // If replace fails, recreate the connection
+          await hostRecreatePeerConnection(peerId, newStream);
         }
       }
     }
@@ -306,6 +308,22 @@ audioEl.addEventListener("timeupdate", () => {
   }
 });
 
+// Keep connections alive when audio ends
+audioEl.addEventListener("ended", () => {
+  if (isHost && stream) {
+    // Ensure stream stays active even when audio ends
+    // This prevents WebRTC connections from closing
+    setTimeout(async () => {
+      try {
+        await ensureHostStream();
+        console.log("Stream refreshed after audio ended");
+      } catch (e) {
+        console.warn("Failed to refresh stream after audio ended:", e);
+      }
+    }, 100);
+  }
+});
+
 // Listener local controls
 localVol.oninput = () => {
   remoteAudio.volume = Number(localVol.value);
@@ -314,56 +332,103 @@ localMute.onclick = () => {
   remoteAudio.muted = !remoteAudio.muted;
 };
 
+// Step-by-step room flow
+let currentStep = 'initial'; // 'initial', 'create-pin', 'join-details'
+
+function showInitialStep() {
+  $("username").style.display = "block";
+  $("roomId").style.display = "none";
+  $("pin").style.display = "none";
+  $("createBtn").style.display = "inline-block";
+  $("joinBtn").style.display = "inline-block";
+  $("createBtn").textContent = "Create as Host";
+  $("joinBtn").textContent = "Join Room";
+  currentStep = 'initial';
+}
+
+function showCreatePinStep() {
+  $("username").style.display = "none";
+  $("roomId").style.display = "none";
+  $("pin").style.display = "block";
+  $("pin").placeholder = "Enter PIN (optional)";
+  $("createBtn").textContent = "Create Room";
+  $("joinBtn").textContent = "Skip PIN";
+  currentStep = 'create-pin';
+}
+
+function showJoinDetailsStep() {
+  $("username").style.display = "none";
+  $("roomId").style.display = "block";
+  $("pin").style.display = "block";
+  $("pin").placeholder = "Enter PIN (if required)";
+  $("createBtn").textContent = "Back";
+  $("joinBtn").textContent = "Join Room";
+  currentStep = 'join-details';
+}
+
 // Room create/join
 $("createBtn").onclick = () => {
-  const username = $("username").value.trim();
-  
-  if (!username) {
-    alert("Please enter a username");
-    return;
+  if (currentStep === 'initial') {
+    const username = $("username").value.trim();
+    if (!username) {
+      alert("Please enter a username");
+      return;
+    }
+    showCreatePinStep();
+  } else if (currentStep === 'create-pin') {
+    const username = $("username").value.trim();
+    const roomId = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    ws.send(JSON.stringify({ 
+      type: "room:create", 
+      roomId: roomId, 
+      pin: $("pin").value || null,
+      username: username
+    }));
+  } else if (currentStep === 'join-details') {
+    showInitialStep();
   }
-  
-  // Auto-generate 6-digit room ID
-  const roomId = Math.floor(100000 + Math.random() * 900000).toString();
-  
-  ws.send(JSON.stringify({ 
-    type: "room:create", 
-    roomId: roomId, 
-    pin: $("pin").value || null,
-    username: username
-  }));
 };
 
 $("joinBtn").onclick = () => {
-  const username = $("username").value.trim();
-  const roomId = $("roomId").value.trim();
-  
-  if (!username) {
-    alert("Please enter a username");
-    return;
+  if (currentStep === 'initial') {
+    const username = $("username").value.trim();
+    if (!username) {
+      alert("Please enter a username");
+      return;
+    }
+    showJoinDetailsStep();
+  } else if (currentStep === 'create-pin') {
+    // Skip PIN for room creation
+    const username = $("username").value.trim();
+    const roomId = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    ws.send(JSON.stringify({ 
+      type: "room:create", 
+      roomId: roomId, 
+      pin: null,
+      username: username
+    }));
+  } else if (currentStep === 'join-details') {
+    const username = $("username").value.trim();
+    const roomId = $("roomId").value.trim();
+    
+    if (!roomId || !/^\d{6}$/.test(roomId)) {
+      alert("Room ID must be exactly 6 digits");
+      return;
+    }
+    
+    ws.send(JSON.stringify({ 
+      type: "room:join", 
+      roomId: roomId, 
+      pin: $("pin").value || null,
+      username: username
+    }));
   }
-  
-  if (!roomId || !/^\d{6}$/.test(roomId)) {
-    alert("Room ID must be exactly 6 digits");
-    return;
-  }
-  
-  ws.send(JSON.stringify({ 
-    type: "room:join", 
-    roomId: roomId, 
-    pin: $("pin").value || null,
-    username: username
-  }));
 };
 
-// Show room ID input when joining
-$("joinBtn").addEventListener("mouseenter", () => {
-  $("roomId").style.display = "block";
-});
-
-$("createBtn").addEventListener("mouseenter", () => {
-  $("roomId").style.display = "none";
-});
+// Initialize UI
+showInitialStep();
 
 transferBtn.onclick = () => {
   const targetId = transferSelect.value;

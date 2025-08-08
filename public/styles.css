@@ -221,9 +221,7 @@ input[type="range"]::-moz-range-track {
   margin: 0 1rem;
 }
 
-.join-only {
-  display: none;
-}
+
 
 #me {
   font-weight: 600;
