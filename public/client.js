@@ -22,6 +22,13 @@ let roomId = null;
 let isHost = false;
 let hostId = null;
 let currentTrackInfo = { title: "No track loaded", artist: "Select an audio file to start" };
+let playlist = [];
+let currentTrackIndex = -1;
+let loopQueue = false;
+let loopSong = false;
+let shuffleMode = false;
+let reorderMode = false;
+let shuffleHistory = [];
 
 // WebRTC
 let pc = null;
@@ -39,11 +46,23 @@ const audioEl = $("audio");
 const playBtn = $("playBtn");
 const pauseBtn = $("pauseBtn");
 const stopBtn = $("stopBtn");
+const prevBtn = $("prevBtn");
+const nextBtn = $("nextBtn");
 const seek = $("seek");
 const curTime = $("curTime");
 const dur = $("dur");
 const volume = $("volume");
 const muteBtn = $("muteBtn");
+const hostControlsSection = $("hostControlsSection");
+const playlistFileInput = $("playlistFileInput");
+const addFilesBtn = $("addFilesBtn");
+const playlistContainer = $("playlistContainer");
+const playlistEmpty = $("playlistEmpty");
+const playlistItems = $("playlistItems");
+const loopQueueBtn = $("loopQueueBtn");
+const loopSongBtn = $("loopSongBtn");
+const shuffleBtn = $("shuffleBtn");
+const reorderBtn = $("reorderBtn");
 const transferSelect = $("transferSelect");
 const transferBtn = $("transferBtn");
 const kickSelect = $("kickSelect");
@@ -176,6 +195,242 @@ function extractTrackInfo(file) {
       title: nameParts[0].trim()
     };
   }
+}
+
+function addToPlaylist(files) {
+  const supportedTypes = ['audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/ogg', 'audio/webm'];
+  let hasErrors = false;
+  
+  Array.from(files).forEach(file => {
+    if (!supportedTypes.some(type => file.type.startsWith(type.split('/')[0]))) {
+      showPlaylistError(`Unsupported file type: ${file.name}`);
+      hasErrors = true;
+      return;
+    }
+    
+    const trackInfo = extractTrackInfo(file);
+    let title = trackInfo.title;
+    
+    // Handle duplicate names
+    let counter = 2;
+    const originalTitle = title;
+    while (playlist.some(item => item.title === title)) {
+      title = `${originalTitle} (${counter})`;
+      counter++;
+    }
+    
+    const playlistItem = {
+      id: Date.now() + Math.random(),
+      title: title,
+      artist: trackInfo.artist,
+      filename: file.name,
+      file: file,
+      url: URL.createObjectURL(file)
+    };
+    
+    playlist.push(playlistItem);
+  });
+  
+  updatePlaylistDisplay();
+  if (!hasErrors && files.length > 0) {
+    hidePlaylistError();
+  }
+}
+
+function showPlaylistError(message) {
+  let errorDiv = playlistContainer.querySelector('.playlist-error');
+  if (!errorDiv) {
+    errorDiv = document.createElement('div');
+    errorDiv.className = 'playlist-error';
+    playlistContainer.insertBefore(errorDiv, playlistItems);
+  }
+  errorDiv.textContent = message;
+  setTimeout(hidePlaylistError, 5000);
+}
+
+function hidePlaylistError() {
+  const errorDiv = playlistContainer.querySelector('.playlist-error');
+  if (errorDiv) {
+    errorDiv.remove();
+  }
+}
+
+function updatePlaylistDisplay() {
+  if (playlist.length === 0) {
+    playlistEmpty.style.display = 'block';
+    playlistItems.style.display = 'none';
+    return;
+  }
+  
+  playlistEmpty.style.display = 'none';
+  playlistItems.style.display = 'block';
+  playlistItems.innerHTML = '';
+  
+  playlist.forEach((item, index) => {
+    const itemDiv = document.createElement('div');
+    itemDiv.className = `playlist-item ${index === currentTrackIndex ? 'playing' : ''} ${reorderMode ? 'reorder-mode' : ''}`;
+    itemDiv.draggable = reorderMode;
+    
+    itemDiv.innerHTML = `
+      <div class="playlist-index">${index + 1}.</div>
+      <div class="playlist-info">
+        <div class="playlist-title">${item.title}</div>
+        <div class="playlist-filename">${item.filename}</div>
+      </div>
+      <button class="playlist-remove" title="Remove track">🗑️</button>
+    `;
+    
+    // Click to play
+    itemDiv.addEventListener('click', (e) => {
+      if (!e.target.closest('.playlist-remove') && !reorderMode) {
+        playTrack(index);
+      }
+    });
+    
+    // Remove button
+    itemDiv.querySelector('.playlist-remove').addEventListener('click', (e) => {
+      e.stopPropagation();
+      removeFromPlaylist(index);
+    });
+    
+    // Drag and drop for reordering
+    if (reorderMode) {
+      itemDiv.addEventListener('dragstart', (e) => {
+        e.dataTransfer.setData('text/plain', index);
+        itemDiv.style.opacity = '0.5';
+      });
+      
+      itemDiv.addEventListener('dragend', () => {
+        itemDiv.style.opacity = '1';
+      });
+      
+      itemDiv.addEventListener('dragover', (e) => {
+        e.preventDefault();
+      });
+      
+      itemDiv.addEventListener('drop', (e) => {
+        e.preventDefault();
+        const dragIndex = parseInt(e.dataTransfer.getData('text/plain'));
+        const dropIndex = index;
+        
+        if (dragIndex !== dropIndex) {
+          reorderPlaylist(dragIndex, dropIndex);
+        }
+      });
+    }
+    
+    playlistItems.appendChild(itemDiv);
+  });
+}
+
+function removeFromPlaylist(index) {
+  URL.revokeObjectURL(playlist[index].url);
+  playlist.splice(index, 1);
+  
+  // Adjust current track index
+  if (currentTrackIndex === index) {
+    currentTrackIndex = -1;
+  } else if (currentTrackIndex > index) {
+    currentTrackIndex--;
+  }
+  
+  updatePlaylistDisplay();
+}
+
+function reorderPlaylist(fromIndex, toIndex) {
+  const item = playlist.splice(fromIndex, 1)[0];
+  playlist.splice(toIndex, 0, item);
+  
+  // Adjust current track index
+  if (currentTrackIndex === fromIndex) {
+    currentTrackIndex = toIndex;
+  } else if (currentTrackIndex > fromIndex && currentTrackIndex <= toIndex) {
+    currentTrackIndex--;
+  } else if (currentTrackIndex < fromIndex && currentTrackIndex >= toIndex) {
+    currentTrackIndex++;
+  }
+  
+  updatePlaylistDisplay();
+}
+
+function playTrack(index) {
+  if (index < 0 || index >= playlist.length) return;
+  
+  currentTrackIndex = index;
+  const track = playlist[index];
+  currentTrackInfo = { title: track.title, artist: track.artist };
+  
+  audioEl.src = track.url;
+  audioEl.load();
+  
+  audioEl.addEventListener('loadeddata', async () => {
+    try {
+      await ensureHostStream();
+      logChat(`Playing: ${track.title} by ${track.artist}`);
+      
+      // Broadcast track info
+      ws.send(JSON.stringify({
+        type: "track:update",
+        trackInfo: currentTrackInfo
+      }));
+      
+      updatePlaylistDisplay();
+    } catch (e) {
+      console.error('Failed to update stream:', e);
+    }
+  }, { once: true });
+}
+
+function playNext() {
+  if (playlist.length === 0) return;
+  
+  let nextIndex;
+  
+  if (shuffleMode) {
+    const availableIndices = playlist.map((_, i) => i).filter(i => !shuffleHistory.includes(i));
+    if (availableIndices.length === 0) {
+      shuffleHistory = [];
+      availableIndices = playlist.map((_, i) => i);
+    }
+    nextIndex = availableIndices[Math.floor(Math.random() * availableIndices.length)];
+    shuffleHistory.push(nextIndex);
+    if (shuffleHistory.length > playlist.length) {
+      shuffleHistory.shift();
+    }
+  } else {
+    nextIndex = currentTrackIndex + 1;
+    if (nextIndex >= playlist.length) {
+      if (loopQueue) {
+        nextIndex = 0;
+      } else {
+        return;
+      }
+    }
+  }
+  
+  playTrack(nextIndex);
+}
+
+function playPrevious() {
+  if (playlist.length === 0) return;
+  
+  let prevIndex;
+  
+  if (shuffleMode && shuffleHistory.length > 1) {
+    shuffleHistory.pop(); // Remove current
+    prevIndex = shuffleHistory[shuffleHistory.length - 1];
+  } else {
+    prevIndex = currentTrackIndex - 1;
+    if (prevIndex < 0) {
+      if (loopQueue) {
+        prevIndex = playlist.length - 1;
+      } else {
+        return;
+      }
+    }
+  }
+  
+  playTrack(prevIndex);
 }
 
 function updateUsersList(users, hostId, usernames = {}) {
@@ -384,40 +639,13 @@ async function listenerHandleOffer(fromId, sdp) {
   ws.send(JSON.stringify({ type: "webrtc:signal", targetId: fromId, payload: { kind: "answer", sdp: answer } }));
 }
 
-// File upload handler function
+// File upload handler function (legacy - now uses playlist)
 async function handleFileUpload(file) {
   if (!file) return;
-  
-  // Check if file is audio/video
-  if (!file.type.startsWith('audio/') && !file.type.startsWith('video/')) {
-    logChat('Please select an audio or video file.');
-    return;
+  addToPlaylist([file]);
+  if (playlist.length === 1) {
+    playTrack(0);
   }
-  
-  // Extract track info from filename
-  const trackData = extractTrackInfo(file);
-  currentTrackInfo = trackData;
-  updateTrackDisplay();
-  
-  const url = URL.createObjectURL(file);
-  audioEl.src = url;
-  await audioEl.load();
-  
-  audioEl.addEventListener('loadeddata', async () => {
-    try {
-      await ensureHostStream();
-      logChat(`New track loaded: ${currentTrackInfo.title} by ${currentTrackInfo.artist}`);
-      
-      // Broadcast track info to all clients
-      ws.send(JSON.stringify({
-        type: "track:update",
-        trackInfo: currentTrackInfo
-      }));
-    } catch (e) {
-      console.error('Failed to update stream:', e);
-      logChat(`Warning: Failed to update audio stream for some peers.`);
-    }
-  }, { once: true });
 }
 
 // Host control bindings
@@ -465,6 +693,43 @@ if (fileUploadArea) {
   });
 }
 
+// Playlist control event listeners
+addFilesBtn.onclick = () => {
+  playlistFileInput.click();
+};
+
+playlistFileInput.onchange = () => {
+  if (playlistFileInput.files?.length > 0) {
+    addToPlaylist(playlistFileInput.files);
+    playlistFileInput.value = ''; // Reset input
+  }
+};
+
+loopQueueBtn.onclick = () => {
+  loopQueue = !loopQueue;
+  loopQueueBtn.classList.toggle('active', loopQueue);
+};
+
+loopSongBtn.onclick = () => {
+  loopSong = !loopSong;
+  loopSongBtn.classList.toggle('active', loopSong);
+};
+
+shuffleBtn.onclick = () => {
+  shuffleMode = !shuffleMode;
+  shuffleBtn.classList.toggle('active', shuffleMode);
+  if (shuffleMode) {
+    shuffleHistory = currentTrackIndex >= 0 ? [currentTrackIndex] : [];
+  }
+};
+
+reorderBtn.onclick = () => {
+  reorderMode = !reorderMode;
+  reorderBtn.classList.toggle('active', reorderMode);
+  updatePlaylistDisplay();
+};
+
+// Playback controls
 playBtn.onclick = async () => {
   await audioEl.play();
   ws.send(JSON.stringify({ type: "control:playpause", state: "play" }));
@@ -480,6 +745,14 @@ stopBtn.onclick = () => {
   audioEl.currentTime = 0;
   ws.send(JSON.stringify({ type: "control:seek", time: 0 }));
   ws.send(JSON.stringify({ type: "control:playpause", state: "pause" }));
+};
+
+prevBtn.onclick = () => {
+  playPrevious();
+};
+
+nextBtn.onclick = () => {
+  playNext();
 };
 
 volume.oninput = () => {
@@ -511,15 +784,26 @@ audioEl.addEventListener("timeupdate", () => {
 });
 
 audioEl.addEventListener("ended", () => {
-  if (isHost && stream) {
-    setTimeout(async () => {
-      try {
-        await ensureHostStream();
-        console.log("Stream refreshed after audio ended");
-      } catch (e) {
-        console.warn("Failed to refresh stream after audio ended:", e);
-      }
-    }, 100);
+  if (isHost) {
+    if (loopSong) {
+      audioEl.currentTime = 0;
+      audioEl.play();
+      ws.send(JSON.stringify({ type: "control:seek", time: 0 }));
+      ws.send(JSON.stringify({ type: "control:playpause", state: "play" }));
+    } else {
+      playNext();
+    }
+    
+    if (stream) {
+      setTimeout(async () => {
+        try {
+          await ensureHostStream();
+          console.log("Stream refreshed after audio ended");
+        } catch (e) {
+          console.warn("Failed to refresh stream after audio ended:", e);
+        }
+      }, 100);
+    }
   }
 });
 
@@ -591,9 +875,11 @@ ws.onmessage = async (ev) => {
     
     if (isHost) {
       hostPanel.classList.remove("hidden");
+      hostControlsSection.classList.remove("hidden");
       logChat(`Joined ${roomId} as HOST.`);
     } else {
       hostPanel.classList.add("hidden");
+      hostControlsSection.classList.add("hidden");
       logChat(`Joined ${roomId} as listener.`);
     }
   }
@@ -656,7 +942,8 @@ ws.onmessage = async (ev) => {
   else if (msg.type === "host:you-are-now-host") {
     isHost = true;
     hostPanel.classList.remove("hidden");
-    logChat("You are now the HOST. Load an audio file to start broadcasting.");
+    hostControlsSection.classList.remove("hidden");
+    logChat("You are now the HOST. Add tracks to playlist to start broadcasting.");
   }
   else if (msg.type === "host:attach-all") {
     if (isHost) hostAttachAll(msg.peers || []);
@@ -692,3 +979,4 @@ function pingLoop() {
 // Initialize
 showPage("landing");
 updateTrackDisplay();
+updatePlaylistDisplay();

@@ -138,23 +138,7 @@
               </div>
             </div>
             
-            <div class="playback-controls">
-              <button id="playBtn" class="control-btn">▶️</button>
-              <button id="pauseBtn" class="control-btn">⏸️</button>
-              <button id="stopBtn" class="control-btn">⏹️</button>
-            </div>
-
-            <div class="seek-container">
-              <span id="curTime">0:00</span>
-              <input type="range" id="seek" min="0" max="100" value="0" class="seek-bar" />
-              <span id="dur">0:00</span>
-            </div>
-
-            <div class="volume-container">
-              <span class="volume-icon">🔊</span>
-              <input type="range" id="volume" min="0" max="1" step="0.01" value="1" class="volume-bar" />
-              <button id="muteBtn" class="control-btn-small">🔇</button>
-            </div>
+            
 
             <div class="host-actions">
               <div class="action-group">
@@ -176,30 +160,68 @@
             <audio id="audio" crossorigin="anonymous" class="hidden"></audio>
           </section>
 
-          <!-- Listener Controls -->
-          <section class="listener-panel">
+          <!-- Audio Controls -->
+          <section class="audio-controls">
             <h2>Audio Settings</h2>
+            
+            <!-- Playback Controls for Host -->
+            <div class="host-controls-section hidden" id="hostControlsSection">
+              <div class="control-buttons">
+                <button id="prevBtn" class="control-btn" title="Previous Track">⏮️</button>
+                <button id="playBtn" class="control-btn" title="Play">▶️</button>
+                <button id="pauseBtn" class="control-btn" title="Pause">⏸️</button>
+                <button id="stopBtn" class="control-btn" title="Stop">⏹️</button>
+                <button id="nextBtn" class="control-btn" title="Next Track">⏭️</button>
+              </div>
+              
+              <!-- Master Volume -->
+              <div class="volume-container">
+                <span class="volume-icon">🎵</span>
+                <span class="volume-label">Master</span>
+                <input type="range" id="volume" min="0" max="1" step="0.01" value="1" class="volume-bar" />
+                <button id="muteBtn" class="control-btn-small">🔊</button>
+              </div>
+            </div>
+
+            <!-- Seek Bar -->
+            <div class="seek-container">
+              <span id="curTime">0:00</span>
+              <input type="range" id="seek" min="0" max="100" value="0" class="seek-bar" />
+              <span id="dur">0:00</span>
+            </div>
+
+            <!-- Listener Volume -->
             <div class="volume-container">
               <span class="volume-icon">🔊</span>
+              <span class="volume-label">Local</span>
               <input type="range" id="localVol" min="0" max="1" step="0.01" value="1" class="volume-bar" />
               <button id="localMute" class="control-btn-small">🔇</button>
             </div>
             <audio id="remoteAudio" autoplay playsinline class="hidden"></audio>
           </section>
 
-          <!-- Now Playing -->
-          <section class="now-playing">
-            <h2>Now Playing</h2>
-            <div id="trackInfo" class="track-info">
-              <div class="track-title">No track loaded</div>
-              <div class="track-artist">Select an audio file to start</div>
+          <!-- Playlist -->
+          <section class="playlist-section">
+            <div class="playlist-header">
+              <h2>Playlist</h2>
+              <div class="playlist-toolbar">
+                <button id="loopQueueBtn" class="toolbar-btn" title="Loop Queue">🔁</button>
+                <button id="loopSongBtn" class="toolbar-btn" title="Loop Song">🔂</button>
+                <button id="shuffleBtn" class="toolbar-btn" title="Shuffle">🔀</button>
+                <button id="reorderBtn" class="toolbar-btn" title="Reorder Mode">↕️</button>
+              </div>
             </div>
-            <div class="audio-visualizer" id="visualizer">
-              <div class="visualizer-bar"></div>
-              <div class="visualizer-bar"></div>
-              <div class="visualizer-bar"></div>
-              <div class="visualizer-bar"></div>
-              <div class="visualizer-bar"></div>
+            
+            <div class="playlist-controls">
+              <input type="file" id="playlistFileInput" accept=".mp3,.wav,.m4a,.ogg,audio/*" multiple class="hidden" />
+              <button id="addFilesBtn" class="btn-add-files">📁 Add Files</button>
+            </div>
+            
+            <div id="playlistContainer" class="playlist-container">
+              <div id="playlistEmpty" class="playlist-empty">
+                No tracks yet. Add files to start listening.
+              </div>
+              <div id="playlistItems" class="playlist-items"></div>
             </div>
           </section>
         </div>
