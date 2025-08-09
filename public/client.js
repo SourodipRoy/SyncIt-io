@@ -27,6 +27,7 @@ let loopQueue = false;
 let loopSong = false;
 let shuffleMode = false;
 let shuffleHistory = [];
+let reorderMode = false;
 
 // WebRTC
 let pc = null;
@@ -235,6 +236,8 @@ function addToPlaylist(files) {
   updatePlaylistDisplay();
   if (!hasErrors && files.length > 0) {
     hidePlaylistError();
+    // Broadcast updated playlist to all clients
+    broadcastPlaylistUpdate();
   }
 }
 
@@ -411,10 +414,19 @@ function playTrack(index) {
     try {
       await ensureHostStream();
       logChat(`Playing: ${track.title} by ${track.artist}`);
+      
+      // Update track display
+      updateTrackDisplay();
 
       // Broadcast complete state to all clients
       broadcastFullState();
       updatePlaylistDisplay();
+      
+      // Also broadcast track info separately for immediate update
+      ws.send(JSON.stringify({
+        type: "track:update",
+        trackInfo: currentTrackInfo
+      }));
     } catch (e) {
       console.error('Failed to update stream:', e);
     }
@@ -470,6 +482,9 @@ function syncToHostState(state) {
     } else if (!state.isPlaying && !remoteAudio.paused) {
       remoteAudio.pause();
     }
+  } else if (state.isPlaying) {
+    // If we don't have audio stream yet but should be playing, log this
+    console.log("Should be playing but no audio stream available yet");
   }
   
   logChat(`Synced: ${currentTrackInfo.title} by ${currentTrackInfo.artist}`);
@@ -736,9 +751,11 @@ async function listenerHandleOffer(fromId, sdp) {
 // File upload handler function (legacy - now uses playlist)
 async function handleFileUpload(file) {
   if (!file) return;
+  const wasEmpty = playlist.length === 0;
   addToPlaylist([file]);
-  if (playlist.length === 1) {
-    playTrack(0);
+  if (wasEmpty && playlist.length > 0) {
+    // Auto-play first track when playlist was empty
+    setTimeout(() => playTrack(0), 100);
   }
 }
 
@@ -795,11 +812,14 @@ addFilesBtn.onclick = () => {
 
 playlistFileInput.onchange = () => {
   if (!isHost || !playlistFileInput.files?.length) return;
+  const wasEmpty = playlist.length === 0;
   addToPlaylist(playlistFileInput.files);
   playlistFileInput.value = ''; // Reset input
   
-  // Broadcast updated playlist to all clients
-  broadcastPlaylistUpdate();
+  if (wasEmpty && playlist.length > 0) {
+    // Auto-play first track when playlist was empty
+    setTimeout(() => playTrack(0), 100);
+  }
 };
 
 loopQueueBtn.onclick = () => {
@@ -1105,6 +1125,11 @@ ws.onmessage = async (ev) => {
       currentTrackInfo = msg.trackInfo;
       updateTrackDisplay();
       logChat(`Now playing: ${currentTrackInfo.title} by ${currentTrackInfo.artist}`);
+      
+      // Ensure remote audio is ready to play
+      if (remoteAudio && remoteAudio.srcObject && remoteAudio.paused) {
+        remoteAudio.play().catch(console.warn);
+      }
     }
   }
   else if (msg.type === "host:you-are-now-host") {

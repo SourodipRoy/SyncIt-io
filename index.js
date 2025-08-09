@@ -240,7 +240,17 @@ wss.on("connection", (ws) => {
       const roomId = inRoom.get(clientId);
       const room = rooms.get(roomId);
       if (!room || room.hostId !== clientId) return;
-      broadcast(roomId, { type: "sync:full-state", ...data }, clientId);
+      
+      // If targetId is specified, send only to that client
+      if (data.targetId) {
+        const targetSocket = room.sockets.get(data.targetId);
+        if (targetSocket) {
+          safeSend(targetSocket, { type: "sync:full-state", ...data });
+        }
+      } else {
+        // Otherwise broadcast to all
+        broadcast(roomId, { type: "sync:full-state", ...data }, clientId);
+      }
     }
 
     else if (data.type === "sync:request-full-state") {
