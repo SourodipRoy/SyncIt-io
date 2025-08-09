@@ -1,0 +1,30 @@
+You are a senior frontend engineer. Modify ONLY the yellow‑boxed panel in my screenshot — the card titled “Now Playing” with the pink equalizer icon — and turn it into a production‑ready PLAYLIST. Make code changes directly and return patched files.
+
+Requirements (must all be implemented):
+
+1) Replace the pink wave/equalizer icon with an **Add Files** button in the top‑left of this panel.
+   - Accept multiple audio files: .mp3, .wav, .m4a, .ogg
+   - On select, append to playlist and read title from ID3 if present, else use filename.
+
+2) Playlist UI inside this panel:
+   - Each row: index number (“1.”, “2.”…), **Title**, small secondary **filename**, and a **Remove** (trash) button on the right.
+   - Currently playing row: Title in THEME color (use existing accent/pink variable). All others: white.
+   - Clicking a row starts playback. Removing a row reindexes 1..N with no gaps.
+   - Add a small header toolbar (top‑right of this panel) with 4 icon toggles + tooltips:
+     a) Loop queue   b) Loop song   c) Shuffle   d) Reorder (drag & drop mode)
+   - Implement drag‑and‑drop to reorder; update the underlying queue immediately.
+
+3) Controls placement:
+   - KEEP the main track seek/progress bar where it already is (outside this panel).
+   - MOVE **Master Volume**, **Previous**, and **Next** buttons into the “Audio Settings” section (above). Ensure keyboard access (Tab/Enter/Space).
+
+4) Playback logic:
+   - Next/Prev follow current playlist order.
+   - Shuffle randomizes next track without repeating the same track back‑to‑back.
+   - Loop song repeats current track; Loop queue repeats the whole list.
+
+5) Quality/a11y:
+   - Production styling with hover/focus states; ARIA labels for all buttons; contrast‑safe.
+   - Empty state text when no tracks: “No tracks yet. Add files to start listening.”
+   - If a file type is unsupported, show a small inline error under Add Files.
+   - Debounce metadata reading; don’t block UI on multi‑file add; handle duplicate names by appending “(2)”, “(3)”, etc
