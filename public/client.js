@@ -197,6 +197,8 @@ function extractTrackInfo(file) {
 }
 
 function addToPlaylist(files) {
+  if (!isHost) return; // Only host can add files
+  
   const supportedTypes = ['audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/ogg', 'audio/webm'];
   let hasErrors = false;
 
@@ -234,6 +236,42 @@ function addToPlaylist(files) {
   if (!hasErrors && files.length > 0) {
     hidePlaylistError();
   }
+}
+
+function broadcastPlaylistUpdate() {
+  if (!isHost) return;
+  
+  const playlistData = playlist.map(item => ({
+    id: item.id,
+    title: item.title,
+    artist: item.artist,
+    filename: item.filename
+  }));
+  
+  ws.send(JSON.stringify({
+    type: "playlist:update",
+    playlist: playlistData,
+    currentTrackIndex: currentTrackIndex
+  }));
+}
+
+function receivePlaylistUpdate(playlistData, trackIndex) {
+  if (isHost) return; // Host manages their own playlist
+  
+  // Clear existing playlist URLs for listeners
+  playlist.forEach(item => {
+    if (item.url) URL.revokeObjectURL(item.url);
+  });
+  
+  // Update playlist (listeners won't have file objects)
+  playlist = playlistData.map(item => ({
+    ...item,
+    file: null,
+    url: null
+  }));
+  
+  currentTrackIndex = trackIndex;
+  updatePlaylistDisplay();
 }
 
 function showPlaylistError(message) {
@@ -279,18 +317,24 @@ function updatePlaylistDisplay() {
       <button class="playlist-remove" title="Remove track">🗑️</button>
     `;
 
-    // Click to play
+    // Click to play (host only)
     itemDiv.addEventListener('click', (e) => {
-      if (!e.target.closest('.playlist-remove') && !reorderMode) {
+      if (!e.target.closest('.playlist-remove') && !reorderMode && isHost) {
         playTrack(index);
       }
     });
 
-    // Remove button
-    itemDiv.querySelector('.playlist-remove').addEventListener('click', (e) => {
-      e.stopPropagation();
-      removeFromPlaylist(index);
-    });
+    // Remove button (host only)
+    const removeBtn = itemDiv.querySelector('.playlist-remove');
+    if (isHost) {
+      removeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        removeFromPlaylist(index);
+        broadcastPlaylistUpdate();
+      });
+    } else {
+      removeBtn.style.display = 'none'; // Hide remove button for listeners
+    }
 
     // Drag and drop for reordering
     if (reorderMode) {
@@ -353,6 +397,7 @@ function reorderPlaylist(fromIndex, toIndex) {
 }
 
 function playTrack(index) {
+  if (!isHost) return; // Only host can control playback
   if (index < 0 || index >= playlist.length) return;
 
   currentTrackIndex = index;
@@ -367,12 +412,8 @@ function playTrack(index) {
       await ensureHostStream();
       logChat(`Playing: ${track.title} by ${track.artist}`);
 
-      // Broadcast track info
-      ws.send(JSON.stringify({
-        type: "track:update",
-        trackInfo: currentTrackInfo
-      }));
-
+      // Broadcast complete state to all clients
+      broadcastFullState();
       updatePlaylistDisplay();
     } catch (e) {
       console.error('Failed to update stream:', e);
@@ -380,8 +421,62 @@ function playTrack(index) {
   }, { once: true });
 }
 
+function broadcastFullState() {
+  if (!isHost) return;
+  
+  ws.send(JSON.stringify({
+    type: "sync:full-state",
+    trackInfo: currentTrackInfo,
+    currentTrackIndex: currentTrackIndex,
+    playlist: playlist.map(item => ({
+      id: item.id,
+      title: item.title,
+      artist: item.artist,
+      filename: item.filename
+    })),
+    isPlaying: !audioEl.paused,
+    currentTime: audioEl.currentTime,
+    volume: audioEl.volume,
+    muted: audioEl.muted,
+    timestamp: Date.now()
+  }));
+}
+
+function syncToHostState(state) {
+  if (isHost) return; // Host doesn't sync to itself
+  
+  // Update track info
+  currentTrackInfo = state.trackInfo;
+  currentTrackIndex = state.currentTrackIndex;
+  
+  // Update playlist
+  receivePlaylistUpdate(state.playlist, state.currentTrackIndex);
+  
+  // Update display
+  updateTrackDisplay();
+  
+  // Sync playback state (listeners use remote audio)
+  if (remoteAudio && remoteAudio.srcObject) {
+    const timeDiff = (Date.now() - state.timestamp) / 1000;
+    const syncTime = state.currentTime + timeDiff;
+    
+    if (Math.abs(remoteAudio.currentTime - syncTime) > 0.5) {
+      // Only seek if significantly out of sync
+      remoteAudio.currentTime = syncTime;
+    }
+    
+    if (state.isPlaying && remoteAudio.paused) {
+      remoteAudio.play().catch(console.warn);
+    } else if (!state.isPlaying && !remoteAudio.paused) {
+      remoteAudio.pause();
+    }
+  }
+  
+  logChat(`Synced: ${currentTrackInfo.title} by ${currentTrackInfo.artist}`);
+}
+
 function playNext() {
-  if (playlist.length === 0) return;
+  if (!isHost || playlist.length === 0) return;
 
   let nextIndex;
 
@@ -411,7 +506,7 @@ function playNext() {
 }
 
 function playPrevious() {
-  if (playlist.length === 0) return;
+  if (!isHost || playlist.length === 0) return;
 
   let prevIndex;
 
@@ -692,16 +787,19 @@ if (fileUploadArea) {
   });
 }
 
-// Playlist control event listeners
+// Playlist control event listeners (host only)
 addFilesBtn.onclick = () => {
+  if (!isHost) return;
   playlistFileInput.click();
 };
 
 playlistFileInput.onchange = () => {
-  if (playlistFileInput.files?.length > 0) {
-    addToPlaylist(playlistFileInput.files);
-    playlistFileInput.value = ''; // Reset input
-  }
+  if (!isHost || !playlistFileInput.files?.length) return;
+  addToPlaylist(playlistFileInput.files);
+  playlistFileInput.value = ''; // Reset input
+  
+  // Broadcast updated playlist to all clients
+  broadcastPlaylistUpdate();
 };
 
 loopQueueBtn.onclick = () => {
@@ -728,40 +826,74 @@ reorderBtn.onclick = () => {
   updatePlaylistDisplay();
 };
 
-// Playback controls
+// Playback controls (host only)
 playBtn.onclick = async () => {
+  if (!isHost) return;
   await audioEl.play();
-  ws.send(JSON.stringify({ type: "control:playpause", state: "play" }));
+  ws.send(JSON.stringify({ 
+    type: "control:playpause", 
+    state: "play",
+    timestamp: Date.now(),
+    currentTime: audioEl.currentTime
+  }));
 };
 
 pauseBtn.onclick = () => {
+  if (!isHost) return;
   audioEl.pause();
-  ws.send(JSON.stringify({ type: "control:playpause", state: "pause" }));
+  ws.send(JSON.stringify({ 
+    type: "control:playpause", 
+    state: "pause",
+    timestamp: Date.now(),
+    currentTime: audioEl.currentTime
+  }));
 };
 
 stopBtn.onclick = () => {
+  if (!isHost) return;
   audioEl.pause();
   audioEl.currentTime = 0;
-  ws.send(JSON.stringify({ type: "control:seek", time: 0 }));
-  ws.send(JSON.stringify({ type: "control:playpause", state: "pause" }));
+  ws.send(JSON.stringify({ 
+    type: "control:seek", 
+    time: 0,
+    timestamp: Date.now()
+  }));
+  ws.send(JSON.stringify({ 
+    type: "control:playpause", 
+    state: "pause",
+    timestamp: Date.now(),
+    currentTime: 0
+  }));
 };
 
 prevBtn.onclick = () => {
+  if (!isHost) return;
   playPrevious();
 };
 
 nextBtn.onclick = () => {
+  if (!isHost) return;
   playNext();
 };
 
 volume.oninput = () => {
+  if (!isHost) return;
   audioEl.volume = Number(volume.value);
-  ws.send(JSON.stringify({ type: "control:volume", volume: Number(volume.value) }));
+  ws.send(JSON.stringify({ 
+    type: "control:volume", 
+    volume: Number(volume.value),
+    timestamp: Date.now()
+  }));
 };
 
 muteBtn.onclick = () => {
+  if (!isHost) return;
   audioEl.muted = !audioEl.muted;
-  ws.send(JSON.stringify({ type: "control:mute", muted: audioEl.muted }));
+  ws.send(JSON.stringify({ 
+    type: "control:mute", 
+    muted: audioEl.muted,
+    timestamp: Date.now()
+  }));
   muteBtn.textContent = audioEl.muted ? "🔇" : "🔊";
 };
 
@@ -769,7 +901,11 @@ seek.oninput = () => {
   if (!audioEl.duration || !isHost) return;
   const t = (Number(seek.value) / 100) * audioEl.duration;
   audioEl.currentTime = t;
-  ws.send(JSON.stringify({ type: "control:seek", time: t }));
+  ws.send(JSON.stringify({ 
+    type: "control:seek", 
+    time: t,
+    timestamp: Date.now()
+  }));
 };
 
 audioEl.addEventListener("timeupdate", () => {
@@ -879,6 +1015,9 @@ ws.onmessage = async (ev) => {
       document.querySelectorAll('.host-only-control').forEach(el => el.classList.remove('hidden'));
       // Hide listener-only controls
       document.querySelectorAll('.listener-only-control').forEach(el => el.classList.add('hidden'));
+      // Show playlist controls for host
+      addFilesBtn.style.display = 'block';
+      document.querySelectorAll('.toolbar-btn').forEach(btn => btn.style.display = 'block');
       logChat(`Joined ${roomId} as HOST.`);
     } else {
       hostPanel.classList.add("hidden");
@@ -886,7 +1025,13 @@ ws.onmessage = async (ev) => {
       document.querySelectorAll('.host-only-control').forEach(el => el.classList.add('hidden'));
       // Show listener-only controls
       document.querySelectorAll('.listener-only-control').forEach(el => el.classList.remove('hidden'));
+      // Hide playlist controls for listeners
+      addFilesBtn.style.display = 'none';
+      document.querySelectorAll('.toolbar-btn').forEach(btn => btn.style.display = 'none');
       logChat(`Joined ${roomId} as listener.`);
+      
+      // Request full state sync from host
+      ws.send(JSON.stringify({ type: "sync:request-full-state" }));
     }
   }
   else if (msg.type === "presence:update") {
@@ -916,14 +1061,25 @@ ws.onmessage = async (ev) => {
   }
   else if (msg.type === "control:playpause") {
     if (!isHost && remoteAudio.srcObject) {
-      if (msg.state === "play") remoteAudio.play().catch(()=>{});
-      if (msg.state === "pause") remoteAudio.pause();
+      const timeDiff = (Date.now() - msg.timestamp) / 1000;
+      const syncTime = msg.currentTime + timeDiff;
+      
+      if (msg.state === "play") {
+        if (Math.abs(remoteAudio.currentTime - syncTime) > 0.2) {
+          remoteAudio.currentTime = syncTime;
+        }
+        remoteAudio.play().catch(()=>{});
+      }
+      if (msg.state === "pause") {
+        remoteAudio.pause();
+      }
     }
   }
   else if (msg.type === "control:seek") {
     if (!isHost && remoteAudio.srcObject) {
-      remoteAudio.pause();
-      setTimeout(() => remoteAudio.play().catch(()=>{}), 50);
+      const timeDiff = (Date.now() - msg.timestamp) / 1000;
+      const syncTime = msg.time + timeDiff;
+      remoteAudio.currentTime = syncTime;
     }
   }
   else if (msg.type === "control:volume") {
@@ -937,6 +1093,12 @@ ws.onmessage = async (ev) => {
     if (!isHost && remoteAudio.srcObject) {
       remoteAudio.muted = !!msg.muted;
     }
+  }
+  else if (msg.type === "sync:full-state") {
+    syncToHostState(msg);
+  }
+  else if (msg.type === "playlist:update") {
+    receivePlaylistUpdate(msg.playlist, msg.currentTrackIndex);
   }
   else if (msg.type === "track:update") {
     if (!isHost) {
@@ -952,7 +1114,13 @@ ws.onmessage = async (ev) => {
     document.querySelectorAll('.host-only-control').forEach(el => el.classList.remove('hidden'));
     // Hide listener-only controls
     document.querySelectorAll('.listener-only-control').forEach(el => el.classList.add('hidden'));
+    // Show playlist controls for new host
+    addFilesBtn.style.display = 'block';
+    document.querySelectorAll('.toolbar-btn').forEach(btn => btn.style.display = 'block');
     logChat("You are now the HOST. Add tracks to playlist to start broadcasting.");
+    
+    // Immediately broadcast current state to all listeners
+    setTimeout(() => broadcastFullState(), 100);
   }
   else if (msg.type === "host:attach-all") {
     if (isHost) hostAttachAll(msg.peers || []);
@@ -966,6 +1134,29 @@ ws.onmessage = async (ev) => {
   }
   else if (msg.type === "chat:new") {
     logChat(msg.text, msg.from);
+  }
+  else if (msg.type === "sync:request-full-state") {
+    if (isHost && msg.requesterId) {
+      // Send full state to specific requester
+      const fullState = {
+        type: "sync:full-state",
+        trackInfo: currentTrackInfo,
+        currentTrackIndex: currentTrackIndex,
+        playlist: playlist.map(item => ({
+          id: item.id,
+          title: item.title,
+          artist: item.artist,
+          filename: item.filename
+        })),
+        isPlaying: !audioEl.paused,
+        currentTime: audioEl.currentTime,
+        volume: audioEl.volume,
+        muted: audioEl.muted,
+        timestamp: Date.now(),
+        targetId: msg.requesterId
+      };
+      ws.send(JSON.stringify(fullState));
+    }
   }
   else if (msg.type === "pong") {
     const ms = Date.now() - msg.t;
