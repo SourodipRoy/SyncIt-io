@@ -75,87 +75,18 @@ function updatePresence(list, host, usernames = {}) {
 
 // Host: prepare capture + create sender PC per peer
 async function ensureHostStream() {
-  // Always create a fresh stream for new audio content
+  if (stream) return stream;
   // Use <audio>.captureStream() to grab decoded audio
   // This is supported on modern Chromium/Firefox. Safari 17+ generally OK.
   if (!audioEl.captureStream) {
     alert("Your browser does not support captureStream on <audio>. Try latest Chrome/Firefox.");
     throw new Error("captureStream unsupported");
   }
-  
-  const newStream = audioEl.captureStream();
-  
-  // If we have existing peer connections, update their tracks
-  if (stream && peers.size > 0) {
-    const newAudioTrack = newStream.getAudioTracks()[0];
-    const oldAudioTrack = stream.getAudioTracks()[0];
-    
-    if (newAudioTrack && oldAudioTrack) {
-      // Replace tracks in existing peer connections
-      for (const [peerId, peerData] of peers) {
-        const senders = peerData.pc.getSenders();
-        const audioSender = senders.find(sender => 
-          sender.track && sender.track.kind === 'audio'
-        );
-        
-        if (audioSender) {
-          try {
-            await audioSender.replaceTrack(newAudioTrack);
-          } catch (e) {
-            console.warn(`Failed to replace track for peer ${peerId}:`, e);
-            // If replace fails, recreate the connection
-            await hostRecreatePeerConnection(peerId, newStream);
-          }
-        }
-      }
-    }
-  }
-  
-  stream = newStream;
+  stream = audioEl.captureStream();
   return stream;
 }
 
-async function hostRecreatePeerConnection(peerId, newStream) {
-  // Close existing connection
-  const existingPeer = peers.get(peerId);
-  if (existingPeer) {
-    existingPeer.pc.close();
-  }
-  
-  // Create new connection
-  const pcHost = new RTCPeerConnection({
-    iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }]
-  });
-
-  // Add all tracks to this connection
-  newStream.getAudioTracks().forEach(tr => pcHost.addTrack(tr, newStream));
-
-  pcHost.onicecandidate = (e) => {
-    if (e.candidate) {
-      ws.send(JSON.stringify({ type: "webrtc:signal", targetId: peerId, payload: { kind: "ice", candidate: e.candidate } }));
-    }
-  };
-
-  peers.set(peerId, { pc: pcHost });
-
-  const offer = await pcHost.createOffer({ offerToReceiveAudio: false });
-  await pcHost.setLocalDescription(offer);
-  ws.send(JSON.stringify({ type: "webrtc:signal", targetId: peerId, payload: { kind: "offer", sdp: offer } }));
-}
-
 async function hostCreateSenderFor(peerId) {
-  // Check if we already have a connection for this peer
-  const existingPeer = peers.get(peerId);
-  if (existingPeer && existingPeer.pc.connectionState === 'connected') {
-    console.log(`Peer ${peerId} already connected, skipping.`);
-    return;
-  }
-  
-  // Close existing connection if it exists but is not connected
-  if (existingPeer) {
-    existingPeer.pc.close();
-  }
-  
   await ensureHostStream();
   const pcHost = new RTCPeerConnection({
     iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }]
@@ -167,20 +98,6 @@ async function hostCreateSenderFor(peerId) {
   pcHost.onicecandidate = (e) => {
     if (e.candidate) {
       ws.send(JSON.stringify({ type: "webrtc:signal", targetId: peerId, payload: { kind: "ice", candidate: e.candidate } }));
-    }
-  };
-  
-  // Handle connection state changes
-  pcHost.onconnectionstatechange = () => {
-    console.log(`Peer ${peerId} connection state: ${pcHost.connectionState}`);
-    if (pcHost.connectionState === 'failed' || pcHost.connectionState === 'disconnected') {
-      // Try to reconnect after a short delay
-      setTimeout(() => {
-        if (peers.has(peerId)) {
-          console.log(`Attempting to reconnect to peer ${peerId}`);
-          hostCreateSenderFor(peerId);
-        }
-      }, 2000);
     }
   };
 
@@ -199,13 +116,7 @@ async function hostAttachAll(peerIds) {
 
 // Listener: single PC to receive from host
 async function ensureListenerPC() {
-  if (pc && pc.connectionState === 'connected') return pc;
-  
-  // Close existing connection if it's not working
-  if (pc) {
-    pc.close();
-  }
-  
+  if (pc) return pc;
   pc = new RTCPeerConnection({
     iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }]
   });
@@ -213,23 +124,11 @@ async function ensureListenerPC() {
   pc.ontrack = (e) => {
     // e.streams[0] should have the host audio
     remoteAudio.srcObject = e.streams[0];
-    logChat("Connected to host audio stream.");
   };
 
   pc.onicecandidate = (e) => {
     if (e.candidate) {
       ws.send(JSON.stringify({ type: "webrtc:signal", targetId: hostId, payload: { kind: "ice", candidate: e.candidate } }));
-    }
-  };
-  
-  // Handle connection state changes
-  pc.onconnectionstatechange = () => {
-    console.log(`Listener connection state: ${pc.connectionState}`);
-    if (pc.connectionState === 'connected') {
-      logChat("Audio connection established with host.");
-    } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
-      logChat("Audio connection lost. Waiting for reconnection...");
-      // The host will send a new offer when they load new audio
     }
   };
 
@@ -252,17 +151,8 @@ fileInput.onchange = async () => {
   const url = URL.createObjectURL(f);
   audioEl.src = url;
   await audioEl.load();
-  
-  // Wait for audio to be ready, then update stream for all connected peers
-  audioEl.addEventListener('loadeddata', async () => {
-    try {
-      await ensureHostStream();
-      logChat(`New audio file loaded. Stream updated for all connected peers.`);
-    } catch (e) {
-      console.error('Failed to update stream:', e);
-      logChat(`Warning: Failed to update audio stream for some peers.`);
-    }
-  }, { once: true });
+  // Initialize capture early so new peers immediately get the stream
+  await ensureHostStream();
 };
 
 playBtn.onclick = async () => {
