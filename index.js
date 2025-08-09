@@ -147,47 +147,28 @@ wss.on("connection", (ws) => {
       const roomId = inRoom.get(clientId);
       const room = rooms.get(roomId);
       if (room?.hostId !== clientId) return;
-      broadcast(roomId, { 
-        type: "control:playpause", 
-        state: data.state, 
-        currentTime: data.currentTime,
-        timestamp: data.timestamp,
-        ts: Date.now() 
-      }, clientId);
+      broadcast(roomId, { type: "control:playpause", state: data.state, ts: Date.now() }, clientId);
     }
 
     else if (data.type === "control:seek") {
       const roomId = inRoom.get(clientId);
       const room = rooms.get(roomId);
       if (room?.hostId !== clientId) return;
-      broadcast(roomId, { 
-        type: "control:seek", 
-        time: data.time, 
-        timestamp: data.timestamp,
-        ts: Date.now() 
-      }, clientId);
+      broadcast(roomId, { type: "control:seek", time: data.time, ts: Date.now() }, clientId);
     }
 
     else if (data.type === "control:volume") {
       const roomId = inRoom.get(clientId);
       const room = rooms.get(roomId);
       if (room?.hostId !== clientId) return;
-      broadcast(roomId, { 
-        type: "control:volume", 
-        volume: data.volume,
-        timestamp: data.timestamp
-      }, clientId);
+      broadcast(roomId, { type: "control:volume", volume: data.volume }, clientId);
     }
 
     else if (data.type === "control:mute") {
       const roomId = inRoom.get(clientId);
       const room = rooms.get(roomId);
       if (room?.hostId !== clientId) return;
-      broadcast(roomId, { 
-        type: "control:mute", 
-        muted: data.muted,
-        timestamp: data.timestamp
-      }, clientId);
+      broadcast(roomId, { type: "control:mute", muted: data.muted }, clientId);
     }
 
     else if (data.type === "host:transfer") {
@@ -220,48 +201,6 @@ wss.on("connection", (ws) => {
       const room = rooms.get(roomId);
       const senderUsername = room.usernames.get(clientId) || "Anonymous";
       broadcast(roomId, { type: "chat:new", from: senderUsername, text: data.text }, null);
-    }
-
-    else if (data.type === "track:update") {
-      const roomId = inRoom.get(clientId);
-      const room = rooms.get(roomId);
-      if (!room || room.hostId !== clientId) return;
-      broadcast(roomId, { type: "track:update", trackInfo: data.trackInfo }, clientId);
-    }
-
-    else if (data.type === "playlist:update") {
-      const roomId = inRoom.get(clientId);
-      const room = rooms.get(roomId);
-      if (!room || room.hostId !== clientId) return;
-      broadcast(roomId, { type: "playlist:update", playlist: data.playlist, currentTrackIndex: data.currentTrackIndex }, clientId);
-    }
-
-    else if (data.type === "sync:full-state") {
-      const roomId = inRoom.get(clientId);
-      const room = rooms.get(roomId);
-      if (!room || room.hostId !== clientId) return;
-      
-      // If targetId is specified, send only to that client
-      if (data.targetId) {
-        const targetSocket = room.sockets.get(data.targetId);
-        if (targetSocket) {
-          safeSend(targetSocket, { type: "sync:full-state", ...data });
-        }
-      } else {
-        // Otherwise broadcast to all
-        broadcast(roomId, { type: "sync:full-state", ...data }, clientId);
-      }
-    }
-
-    else if (data.type === "sync:request-full-state") {
-      const roomId = inRoom.get(clientId);
-      const room = rooms.get(roomId);
-      if (!room || !room.hostId || room.hostId === clientId) return;
-      // Forward request to host
-      const hostSocket = room.sockets.get(room.hostId);
-      if (hostSocket) {
-        safeSend(hostSocket, { type: "sync:request-full-state", requesterId: clientId });
-      }
     }
 
     else if (data.type === "ping") {

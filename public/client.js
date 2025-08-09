@@ -1,43 +1,20 @@
 const $ = (id) => document.getElementById(id);
 
-// Page management
-const pages = {
-  landing: $("landingPage"),
-  createRoom: $("createRoomPage"),
-  joinRoom: $("joinRoomPage"),
-  roomCreated: $("roomCreatedPage"),
-  room: $("roomPage")
-};
-
-function showPage(pageName) {
-  Object.values(pages).forEach(page => page.classList.add("hidden"));
-  pages[pageName].classList.remove("hidden");
-}
-
-// WebSocket and room state
 const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`);
 let clientId = null;
 let roomId = null;
 let isHost = false;
 let hostId = null;
-let currentTrackInfo = { title: "No track loaded", artist: "Select an audio file to start" };
-let playlist = [];
-let currentTrackIndex = -1;
-let loopQueue = false;
-let loopSong = false;
-let shuffleMode = false;
-let shuffleHistory = [];
-let reorderMode = false;
 
-// WebRTC
-let pc = null;
-const peers = new Map();
-let stream = null;
+let pc = null;                // For listener: single RTCPeerConnection receiving from host
+const peers = new Map();      // For host: peerId -> { pc }
+let stream = null;            // Host stream from <audio>.captureStream()
 
 // UI elements
+const me = $("me");
 const roomLabel = $("roomLabel");
 const hostLabel = $("hostLabel");
-const userCount = $("userCount");
+const clientsLabel = $("clients");
 const rttLabel = $("rtt");
 const hostPanel = $("hostPanel");
 const fileInput = $("fileInput");
@@ -45,24 +22,11 @@ const audioEl = $("audio");
 const playBtn = $("playBtn");
 const pauseBtn = $("pauseBtn");
 const stopBtn = $("stopBtn");
-const prevBtn = $("prevBtn");
-const nextBtn = $("nextBtn");
 const seek = $("seek");
 const curTime = $("curTime");
 const dur = $("dur");
 const volume = $("volume");
 const muteBtn = $("muteBtn");
-const playbackControlsSection = $("playbackControlsSection");
-const masterVolumeSection = $("masterVolumeSection");
-const playlistFileInput = $("playlistFileInput");
-const addFilesBtn = $("addFilesBtn");
-const playlistContainer = $("playlistContainer");
-const playlistEmpty = $("playlistEmpty");
-const playlistItems = $("playlistItems");
-const loopQueueBtn = $("loopQueueBtn");
-const loopSongBtn = $("loopSongBtn");
-const shuffleBtn = $("shuffleBtn");
-const reorderBtn = $("reorderBtn");
 const transferSelect = $("transferSelect");
 const transferBtn = $("transferBtn");
 const kickSelect = $("kickSelect");
@@ -73,93 +37,11 @@ const localMute = $("localMute");
 const chatBox = $("chatBox");
 const chatInput = $("chatInput");
 const chatSend = $("chatSend");
-const trackInfo = $("trackInfo");
-const usersList = $("usersList");
 
-// Landing page navigation
-$("createRoomBtn").onclick = () => showPage("createRoom");
-$("joinRoomBtn").onclick = () => showPage("joinRoom");
-$("backToLanding1").onclick = () => showPage("landing");
-$("backToLanding2").onclick = () => showPage("landing");
-
-// Room creation flow
-$("createRoomConfirm").onclick = () => {
-  const username = $("hostUsername").value.trim();
-  if (!username) {
-    alert("Please enter your name");
-    return;
-  }
-
-  const roomId = Math.floor(100000 + Math.random() * 900000).toString();
-  const pin = $("roomPin").value.trim() || null;
-
-  ws.send(JSON.stringify({
-    type: "room:create",
-    roomId: roomId,
-    pin: pin,
-    username: username
-  }));
-};
-
-// Room joining flow
-$("joinRoomConfirm").onclick = () => {
-  const username = $("guestUsername").value.trim();
-  const roomId = $("joinRoomId").value.trim();
-
-  if (!username) {
-    alert("Please enter your name");
-    return;
-  }
-
-  if (!roomId || !/^\d{6}$/.test(roomId)) {
-    alert("Room ID must be exactly 6 digits");
-    return;
-  }
-
-  const pin = $("joinPin").value.trim() || null;
-
-  ws.send(JSON.stringify({
-    type: "room:join",
-    roomId: roomId,
-    pin: pin,
-    username: username
-  }));
-};
-
-// Room created success actions
-$("copyRoomCode").onclick = () => {
-  const code = $("createdRoomCode").textContent;
-  navigator.clipboard.writeText(code).then(() => {
-    $("copyRoomCode").textContent = "Copied!";
-    setTimeout(() => {
-      $("copyRoomCode").textContent = "Copy Code";
-    }, 2000);
-  });
-};
-
-$("enterRoom").onclick = () => {
-  showPage("room");
-  updateTrackDisplay();
-};
-
-$("leaveRoom").onclick = () => {
-  location.reload();
-};
-
-// Utility functions
-function logChat(message, sender = null) {
+function logChat(line) {
   const div = document.createElement("div");
   div.className = "chat-line";
-
-  if (sender) {
-    div.innerHTML = `
-      <div class="chat-sender">${sender}</div>
-      <div class="chat-message">${message}</div>
-    `;
-  } else {
-    div.innerHTML = `<div class="chat-message">${message}</div>`;
-  }
-
+  div.textContent = line;
   chatBox.appendChild(div);
   chatBox.scrollTop = chatBox.scrollHeight;
 }
@@ -171,413 +53,11 @@ function fmtTime(s) {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
-function updateTrackDisplay() {
-  if (trackInfo) {
-    trackInfo.innerHTML = `
-      <div class="track-title">${currentTrackInfo.title}</div>
-      <div class="track-artist">${currentTrackInfo.artist}</div>
-    `;
-  }
-}
-
-function extractTrackInfo(file) {
-  const fileName = file.name;
-  const nameParts = fileName.replace(/\.[^/.]+$/, "").split(" - ");
-
-  if (nameParts.length >= 2) {
-    return {
-      artist: nameParts[0].trim(),
-      title: nameParts.slice(1).join(" - ").trim()
-    };
-  } else {
-    return {
-      artist: "Unknown Artist",
-      title: nameParts[0].trim()
-    };
-  }
-}
-
-function addToPlaylist(files) {
-  if (!isHost) return; // Only host can add files
-  
-  const supportedTypes = ['audio/mpeg', 'audio/wav', 'audio/mp4', 'audio/ogg', 'audio/webm'];
-  let hasErrors = false;
-
-  Array.from(files).forEach(file => {
-    if (!supportedTypes.some(type => file.type.startsWith(type.split('/')[0]))) {
-      showPlaylistError(`Unsupported file type: ${file.name}`);
-      hasErrors = true;
-      return;
-    }
-
-    const trackInfo = extractTrackInfo(file);
-    let title = trackInfo.title;
-
-    // Handle duplicate names
-    let counter = 2;
-    const originalTitle = title;
-    while (playlist.some(item => item.title === title)) {
-      title = `${originalTitle} (${counter})`;
-      counter++;
-    }
-
-    const playlistItem = {
-      id: Date.now() + Math.random(),
-      title: title,
-      artist: trackInfo.artist,
-      filename: file.name,
-      file: file,
-      url: URL.createObjectURL(file)
-    };
-
-    playlist.push(playlistItem);
-  });
-
-  updatePlaylistDisplay();
-  if (!hasErrors && files.length > 0) {
-    hidePlaylistError();
-    // Broadcast updated playlist to all clients
-    broadcastPlaylistUpdate();
-  }
-}
-
-function broadcastPlaylistUpdate() {
-  if (!isHost) return;
-  
-  const playlistData = playlist.map(item => ({
-    id: item.id,
-    title: item.title,
-    artist: item.artist,
-    filename: item.filename
-  }));
-  
-  ws.send(JSON.stringify({
-    type: "playlist:update",
-    playlist: playlistData,
-    currentTrackIndex: currentTrackIndex
-  }));
-}
-
-function receivePlaylistUpdate(playlistData, trackIndex) {
-  if (isHost) return; // Host manages their own playlist
-  
-  // Clear existing playlist URLs for listeners
-  playlist.forEach(item => {
-    if (item.url) URL.revokeObjectURL(item.url);
-  });
-  
-  // Update playlist (listeners won't have file objects)
-  playlist = playlistData.map(item => ({
-    ...item,
-    file: null,
-    url: null
-  }));
-  
-  currentTrackIndex = trackIndex;
-  updatePlaylistDisplay();
-}
-
-function showPlaylistError(message) {
-  let errorDiv = playlistContainer.querySelector('.playlist-error');
-  if (!errorDiv) {
-    errorDiv = document.createElement('div');
-    errorDiv.className = 'playlist-error';
-    playlistContainer.insertBefore(errorDiv, playlistItems);
-  }
-  errorDiv.textContent = message;
-  setTimeout(hidePlaylistError, 5000);
-}
-
-function hidePlaylistError() {
-  const errorDiv = playlistContainer.querySelector('.playlist-error');
-  if (errorDiv) {
-    errorDiv.remove();
-  }
-}
-
-function updatePlaylistDisplay() {
-  if (playlist.length === 0) {
-    playlistEmpty.style.display = 'block';
-    playlistItems.style.display = 'none';
-    return;
-  }
-
-  playlistEmpty.style.display = 'none';
-  playlistItems.style.display = 'block';
-  playlistItems.innerHTML = '';
-
-  playlist.forEach((item, index) => {
-    const itemDiv = document.createElement('div');
-    itemDiv.className = `playlist-item ${index === currentTrackIndex ? 'playing' : ''} ${reorderMode ? 'reorder-mode' : ''}`;
-    itemDiv.draggable = reorderMode;
-
-    itemDiv.innerHTML = `
-      <div class="playlist-index">${index + 1}.</div>
-      <div class="playlist-info">
-        <div class="playlist-title">${item.title}</div>
-        <div class="playlist-filename">${item.filename}</div>
-      </div>
-      <button class="playlist-remove" title="Remove track">🗑️</button>
-    `;
-
-    // Click to play (host only)
-    itemDiv.addEventListener('click', (e) => {
-      if (!e.target.closest('.playlist-remove') && !reorderMode && isHost) {
-        playTrack(index);
-      }
-    });
-
-    // Remove button (host only)
-    const removeBtn = itemDiv.querySelector('.playlist-remove');
-    if (isHost) {
-      removeBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        removeFromPlaylist(index);
-        broadcastPlaylistUpdate();
-      });
-    } else {
-      removeBtn.style.display = 'none'; // Hide remove button for listeners
-    }
-
-    // Drag and drop for reordering
-    if (reorderMode) {
-      itemDiv.addEventListener('dragstart', (e) => {
-        e.dataTransfer.setData('text/plain', index);
-        itemDiv.style.opacity = '0.5';
-      });
-
-      itemDiv.addEventListener('dragend', () => {
-        itemDiv.style.opacity = '1';
-      });
-
-      itemDiv.addEventListener('dragover', (e) => {
-        e.preventDefault();
-      });
-
-      itemDiv.addEventListener('drop', (e) => {
-        e.preventDefault();
-        const dragIndex = parseInt(e.dataTransfer.getData('text/plain'));
-        const dropIndex = index;
-
-        if (dragIndex !== dropIndex) {
-          reorderPlaylist(dragIndex, dropIndex);
-        }
-      });
-    }
-
-    playlistItems.appendChild(itemDiv);
-  });
-}
-
-function removeFromPlaylist(index) {
-  URL.revokeObjectURL(playlist[index].url);
-  playlist.splice(index, 1);
-
-  // Adjust current track index
-  if (currentTrackIndex === index) {
-    currentTrackIndex = -1;
-  } else if (currentTrackIndex > index) {
-    currentTrackIndex--;
-  }
-
-  updatePlaylistDisplay();
-}
-
-function reorderPlaylist(fromIndex, toIndex) {
-  const item = playlist.splice(fromIndex, 1)[0];
-  playlist.splice(toIndex, 0, item);
-
-  // Adjust current track index
-  if (currentTrackIndex === fromIndex) {
-    currentTrackIndex = toIndex;
-  } else if (currentTrackIndex > fromIndex && currentTrackIndex <= toIndex) {
-    currentTrackIndex--;
-  } else if (currentTrackIndex < fromIndex && currentTrackIndex >= toIndex) {
-    currentTrackIndex++;
-  }
-
-  updatePlaylistDisplay();
-}
-
-function playTrack(index) {
-  if (!isHost) return; // Only host can control playback
-  if (index < 0 || index >= playlist.length) return;
-
-  currentTrackIndex = index;
-  const track = playlist[index];
-  currentTrackInfo = { title: track.title, artist: track.artist };
-
-  audioEl.src = track.url;
-  audioEl.load();
-
-  audioEl.addEventListener('loadeddata', async () => {
-    try {
-      await ensureHostStream();
-      logChat(`Playing: ${track.title} by ${track.artist}`);
-      
-      // Update track display
-      updateTrackDisplay();
-
-      // Broadcast complete state to all clients
-      broadcastFullState();
-      updatePlaylistDisplay();
-      
-      // Also broadcast track info separately for immediate update
-      ws.send(JSON.stringify({
-        type: "track:update",
-        trackInfo: currentTrackInfo
-      }));
-    } catch (e) {
-      console.error('Failed to update stream:', e);
-    }
-  }, { once: true });
-}
-
-function broadcastFullState() {
-  if (!isHost) return;
-  
-  ws.send(JSON.stringify({
-    type: "sync:full-state",
-    trackInfo: currentTrackInfo,
-    currentTrackIndex: currentTrackIndex,
-    playlist: playlist.map(item => ({
-      id: item.id,
-      title: item.title,
-      artist: item.artist,
-      filename: item.filename
-    })),
-    isPlaying: !audioEl.paused,
-    currentTime: audioEl.currentTime,
-    volume: audioEl.volume,
-    muted: audioEl.muted,
-    timestamp: Date.now()
-  }));
-}
-
-function syncToHostState(state) {
-  if (isHost) return; // Host doesn't sync to itself
-  
-  // Update track info
-  currentTrackInfo = state.trackInfo;
-  currentTrackIndex = state.currentTrackIndex;
-  
-  // Update playlist
-  receivePlaylistUpdate(state.playlist, state.currentTrackIndex);
-  
-  // Update display
-  updateTrackDisplay();
-  
-  // Sync playback state (listeners use remote audio)
-  if (remoteAudio && remoteAudio.srcObject) {
-    const timeDiff = (Date.now() - state.timestamp) / 1000;
-    const syncTime = state.currentTime + timeDiff;
-    
-    if (Math.abs(remoteAudio.currentTime - syncTime) > 0.5) {
-      // Only seek if significantly out of sync
-      remoteAudio.currentTime = syncTime;
-    }
-    
-    if (state.isPlaying && remoteAudio.paused) {
-      remoteAudio.play().catch(console.warn);
-    } else if (!state.isPlaying && !remoteAudio.paused) {
-      remoteAudio.pause();
-    }
-  } else if (state.isPlaying) {
-    // If we don't have audio stream yet but should be playing, log this
-    console.log("Should be playing but no audio stream available yet");
-  }
-  
-  logChat(`Synced: ${currentTrackInfo.title} by ${currentTrackInfo.artist}`);
-}
-
-function playNext() {
-  if (!isHost || playlist.length === 0) return;
-
-  let nextIndex;
-
-  if (shuffleMode) {
-    const availableIndices = playlist.map((_, i) => i).filter(i => !shuffleHistory.includes(i));
-    if (availableIndices.length === 0) {
-      shuffleHistory = [];
-      availableIndices = playlist.map((_, i) => i);
-    }
-    nextIndex = availableIndices[Math.floor(Math.random() * availableIndices.length)];
-    shuffleHistory.push(nextIndex);
-    if (shuffleHistory.length > playlist.length) {
-      shuffleHistory.shift();
-    }
-  } else {
-    nextIndex = currentTrackIndex + 1;
-    if (nextIndex >= playlist.length) {
-      if (loopQueue) {
-        nextIndex = 0;
-      } else {
-        return;
-      }
-    }
-  }
-
-  playTrack(nextIndex);
-}
-
-function playPrevious() {
-  if (!isHost || playlist.length === 0) return;
-
-  let prevIndex;
-
-  if (shuffleMode && shuffleHistory.length > 1) {
-    shuffleHistory.pop(); // Remove current
-    prevIndex = shuffleHistory[shuffleHistory.length - 1];
-  } else {
-    prevIndex = currentTrackIndex - 1;
-    if (prevIndex < 0) {
-      if (loopQueue) {
-        prevIndex = playlist.length - 1;
-      } else {
-        return;
-      }
-    }
-  }
-
-  playTrack(prevIndex);
-}
-
-function updateUsersList(users, hostId, usernames = {}) {
-  usersList.innerHTML = "";
-
-  users.forEach(userId => {
-    const username = usernames[userId] || "Anonymous";
-    const isHostUser = userId === hostId;
-
-    const userDiv = document.createElement("div");
-    userDiv.className = "user-item";
-
-    const initial = username.charAt(0).toUpperCase();
-
-    userDiv.innerHTML = `
-      <div class="user-avatar">${initial}</div>
-      <div class="user-info">
-        <div class="user-name">${username}</div>
-        <div class="user-status">${isHostUser ? "Host" : "Listener"}</div>
-      </div>
-      ${isHostUser ? '<div class="host-badge">HOST</div>' : ""}
-    `;
-
-    usersList.appendChild(userDiv);
-  });
-
-  // Update user count
-  userCount.textContent = `${users.length} user${users.length !== 1 ? "s" : ""}`;
-}
-
 // Presence UI
 function updatePresence(list, host, usernames = {}) {
   hostLabel.textContent = host ? (usernames[host] || host.slice(0, 8)) : "—";
-
-  // Update user list
-  updateUsersList(list || [], host, usernames);
-
-  // Update selects, exclude self
+  clientsLabel.textContent = (list || []).map(id => usernames[id] || id.slice(0, 6)).join(", ") || "—";
+  // update selects, exclude self
   transferSelect.innerHTML = "";
   kickSelect.innerHTML = "";
   (list || []).forEach(id => {
@@ -595,51 +75,61 @@ function updatePresence(list, host, usernames = {}) {
 
 // Host: prepare capture + create sender PC per peer
 async function ensureHostStream() {
+  // Always create a fresh stream for new audio content
+  // Use <audio>.captureStream() to grab decoded audio
+  // This is supported on modern Chromium/Firefox. Safari 17+ generally OK.
   if (!audioEl.captureStream) {
     alert("Your browser does not support captureStream on <audio>. Try latest Chrome/Firefox.");
     throw new Error("captureStream unsupported");
   }
-
+  
   const newStream = audioEl.captureStream();
-
+  
+  // Always update tracks for existing connections
   if (peers.size > 0) {
     const newAudioTrack = newStream.getAudioTracks()[0];
-
+    
     if (newAudioTrack) {
+      // Replace tracks in existing peer connections
       for (const [peerId, peerData] of peers) {
         try {
           const senders = peerData.pc.getSenders();
-          const audioSender = senders.find(sender =>
+          const audioSender = senders.find(sender => 
             sender.track && sender.track.kind === 'audio'
           );
-
+          
           if (audioSender) {
             await audioSender.replaceTrack(newAudioTrack);
           } else {
+            // No audio sender found, add the track
             peerData.pc.addTrack(newAudioTrack, newStream);
           }
         } catch (e) {
           console.warn(`Failed to update track for peer ${peerId}:`, e);
+          // If replace fails, recreate the connection
           await hostRecreatePeerConnection(peerId, newStream);
         }
       }
     }
   }
-
+  
   stream = newStream;
   return stream;
 }
 
 async function hostRecreatePeerConnection(peerId, newStream) {
+  // Close existing connection
   const existingPeer = peers.get(peerId);
   if (existingPeer) {
     existingPeer.pc.close();
   }
-
+  
+  // Create new connection
   const pcHost = new RTCPeerConnection({
     iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }]
   });
 
+  // Add all tracks to this connection
   newStream.getAudioTracks().forEach(tr => pcHost.addTrack(tr, newStream));
 
   pcHost.onicecandidate = (e) => {
@@ -656,21 +146,24 @@ async function hostRecreatePeerConnection(peerId, newStream) {
 }
 
 async function hostCreateSenderFor(peerId) {
+  // Check if we already have a connection for this peer
   const existingPeer = peers.get(peerId);
   if (existingPeer && existingPeer.pc.connectionState === 'connected') {
     console.log(`Peer ${peerId} already connected, skipping.`);
     return;
   }
-
+  
+  // Close existing connection if it exists but is not connected
   if (existingPeer) {
     existingPeer.pc.close();
   }
-
+  
   await ensureHostStream();
   const pcHost = new RTCPeerConnection({
     iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }]
   });
 
+  // Add all tracks to this connection
   stream.getAudioTracks().forEach(tr => pcHost.addTrack(tr, stream));
 
   pcHost.onicecandidate = (e) => {
@@ -678,10 +171,12 @@ async function hostCreateSenderFor(peerId) {
       ws.send(JSON.stringify({ type: "webrtc:signal", targetId: peerId, payload: { kind: "ice", candidate: e.candidate } }));
     }
   };
-
+  
+  // Handle connection state changes
   pcHost.onconnectionstatechange = () => {
     console.log(`Peer ${peerId} connection state: ${pcHost.connectionState}`);
     if (pcHost.connectionState === 'failed' || pcHost.connectionState === 'disconnected') {
+      // Try to reconnect after a short delay
       setTimeout(() => {
         if (peers.has(peerId)) {
           console.log(`Attempting to reconnect to peer ${peerId}`);
@@ -707,16 +202,18 @@ async function hostAttachAll(peerIds) {
 // Listener: single PC to receive from host
 async function ensureListenerPC() {
   if (pc && pc.connectionState === 'connected') return pc;
-
+  
+  // Close existing connection if it's not working
   if (pc) {
     pc.close();
   }
-
+  
   pc = new RTCPeerConnection({
     iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }]
   });
 
   pc.ontrack = (e) => {
+    // e.streams[0] should have the host audio
     remoteAudio.srcObject = e.streams[0];
     logChat("Connected to host audio stream.");
   };
@@ -726,13 +223,15 @@ async function ensureListenerPC() {
       ws.send(JSON.stringify({ type: "webrtc:signal", targetId: hostId, payload: { kind: "ice", candidate: e.candidate } }));
     }
   };
-
+  
+  // Handle connection state changes
   pc.onconnectionstatechange = () => {
     console.log(`Listener connection state: ${pc.connectionState}`);
     if (pc.connectionState === 'connected') {
       logChat("Audio connection established with host.");
     } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
       logChat("Audio connection lost. Waiting for reconnection...");
+      // The host will send a new offer when they load new audio
     }
   };
 
@@ -740,7 +239,7 @@ async function ensureListenerPC() {
 }
 
 async function listenerHandleOffer(fromId, sdp) {
-  hostId = fromId;
+  hostId = fromId; // sender is host
   const pc = await ensureListenerPC();
   await pc.setRemoteDescription(new RTCSessionDescription(sdp));
   const answer = await pc.createAnswer({ offerToReceiveAudio: true });
@@ -748,184 +247,55 @@ async function listenerHandleOffer(fromId, sdp) {
   ws.send(JSON.stringify({ type: "webrtc:signal", targetId: fromId, payload: { kind: "answer", sdp: answer } }));
 }
 
-// File upload handler function (legacy - now uses playlist)
-async function handleFileUpload(file) {
-  if (!file) return;
-  const wasEmpty = playlist.length === 0;
-  addToPlaylist([file]);
-  if (wasEmpty && playlist.length > 0) {
-    // Auto-play first track when playlist was empty
-    setTimeout(() => playTrack(0), 100);
-  }
-}
-
 // Host control bindings
 fileInput.onchange = async () => {
   const f = fileInput.files?.[0];
-  await handleFileUpload(f);
-};
-
-// Drag and drop functionality
-const fileUploadArea = $("fileUploadArea");
-
-if (fileUploadArea) {
-  // Prevent default drag behaviors
-  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
-    fileUploadArea.addEventListener(eventName, (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-    });
-  });
-
-  // Highlight drop area when item is dragged over it
-  ['dragenter', 'dragover'].forEach(eventName => {
-    fileUploadArea.addEventListener(eventName, () => {
-      fileUploadArea.classList.add('drag-over');
-    });
-  });
-
-  ['dragleave', 'drop'].forEach(eventName => {
-    fileUploadArea.addEventListener(eventName, () => {
-      fileUploadArea.classList.remove('drag-over');
-    });
-  });
-
-  // Handle dropped files
-  fileUploadArea.addEventListener('drop', async (e) => {
-    const files = e.dataTransfer.files;
-    if (files.length > 0) {
-      await handleFileUpload(files[0]);
-    }
-  });
-
-  // Make the entire area clickable
-  fileUploadArea.addEventListener('click', () => {
-    fileInput.click();
-  });
-}
-
-// Playlist control event listeners (host only)
-addFilesBtn.onclick = () => {
-  if (!isHost) return;
-  playlistFileInput.click();
-};
-
-playlistFileInput.onchange = () => {
-  if (!isHost || !playlistFileInput.files?.length) return;
-  const wasEmpty = playlist.length === 0;
-  addToPlaylist(playlistFileInput.files);
-  playlistFileInput.value = ''; // Reset input
+  if (!f) return;
+  const url = URL.createObjectURL(f);
+  audioEl.src = url;
+  await audioEl.load();
   
-  if (wasEmpty && playlist.length > 0) {
-    // Auto-play first track when playlist was empty
-    setTimeout(() => playTrack(0), 100);
-  }
+  // Wait for audio to be ready, then update stream for all connected peers
+  audioEl.addEventListener('loadeddata', async () => {
+    try {
+      await ensureHostStream();
+      logChat(`New audio file loaded. Stream updated for all connected peers.`);
+    } catch (e) {
+      console.error('Failed to update stream:', e);
+      logChat(`Warning: Failed to update audio stream for some peers.`);
+    }
+  }, { once: true });
 };
 
-loopQueueBtn.onclick = () => {
-  loopQueue = !loopQueue;
-  loopQueueBtn.classList.toggle('active', loopQueue);
-};
-
-loopSongBtn.onclick = () => {
-  loopSong = !loopSong;
-  loopSongBtn.classList.toggle('active', loopSong);
-};
-
-shuffleBtn.onclick = () => {
-  shuffleMode = !shuffleMode;
-  shuffleBtn.classList.toggle('active', shuffleMode);
-  if (shuffleMode) {
-    shuffleHistory = currentTrackIndex >= 0 ? [currentTrackIndex] : [];
-  }
-};
-
-reorderBtn.onclick = () => {
-  reorderMode = !reorderMode;
-  reorderBtn.classList.toggle('active', reorderMode);
-  updatePlaylistDisplay();
-};
-
-// Playback controls (host only)
 playBtn.onclick = async () => {
-  if (!isHost) return;
   await audioEl.play();
-  ws.send(JSON.stringify({ 
-    type: "control:playpause", 
-    state: "play",
-    timestamp: Date.now(),
-    currentTime: audioEl.currentTime
-  }));
+  ws.send(JSON.stringify({ type: "control:playpause", state: "play" }));
 };
-
 pauseBtn.onclick = () => {
-  if (!isHost) return;
   audioEl.pause();
-  ws.send(JSON.stringify({ 
-    type: "control:playpause", 
-    state: "pause",
-    timestamp: Date.now(),
-    currentTime: audioEl.currentTime
-  }));
+  ws.send(JSON.stringify({ type: "control:playpause", state: "pause" }));
 };
-
 stopBtn.onclick = () => {
-  if (!isHost) return;
   audioEl.pause();
   audioEl.currentTime = 0;
-  ws.send(JSON.stringify({ 
-    type: "control:seek", 
-    time: 0,
-    timestamp: Date.now()
-  }));
-  ws.send(JSON.stringify({ 
-    type: "control:playpause", 
-    state: "pause",
-    timestamp: Date.now(),
-    currentTime: 0
-  }));
-};
-
-prevBtn.onclick = () => {
-  if (!isHost) return;
-  playPrevious();
-};
-
-nextBtn.onclick = () => {
-  if (!isHost) return;
-  playNext();
+  ws.send(JSON.stringify({ type: "control:seek", time: 0 }));
+  ws.send(JSON.stringify({ type: "control:playpause", state: "pause" }));
 };
 
 volume.oninput = () => {
-  if (!isHost) return;
   audioEl.volume = Number(volume.value);
-  ws.send(JSON.stringify({ 
-    type: "control:volume", 
-    volume: Number(volume.value),
-    timestamp: Date.now()
-  }));
+  ws.send(JSON.stringify({ type: "control:volume", volume: Number(volume.value) }));
 };
-
 muteBtn.onclick = () => {
-  if (!isHost) return;
   audioEl.muted = !audioEl.muted;
-  ws.send(JSON.stringify({ 
-    type: "control:mute", 
-    muted: audioEl.muted,
-    timestamp: Date.now()
-  }));
-  muteBtn.textContent = audioEl.muted ? "🔇" : "🔊";
+  ws.send(JSON.stringify({ type: "control:mute", muted: audioEl.muted }));
 };
 
 seek.oninput = () => {
   if (!audioEl.duration || !isHost) return;
   const t = (Number(seek.value) / 100) * audioEl.duration;
   audioEl.currentTime = t;
-  ws.send(JSON.stringify({ 
-    type: "control:seek", 
-    time: t,
-    timestamp: Date.now()
-  }));
+  ws.send(JSON.stringify({ type: "control:seek", time: t }));
 };
 
 audioEl.addEventListener("timeupdate", () => {
@@ -938,27 +308,19 @@ audioEl.addEventListener("timeupdate", () => {
   }
 });
 
+// Keep connections alive when audio ends
 audioEl.addEventListener("ended", () => {
-  if (isHost) {
-    if (loopSong) {
-      audioEl.currentTime = 0;
-      audioEl.play();
-      ws.send(JSON.stringify({ type: "control:seek", time: 0 }));
-      ws.send(JSON.stringify({ type: "control:playpause", state: "play" }));
-    } else {
-      playNext();
-    }
-
-    if (stream) {
-      setTimeout(async () => {
-        try {
-          await ensureHostStream();
-          console.log("Stream refreshed after audio ended");
-        } catch (e) {
-          console.warn("Failed to refresh stream after audio ended:", e);
-        }
-      }, 100);
-    }
+  if (isHost && stream) {
+    // Ensure stream stays active even when audio ends
+    // This prevents WebRTC connections from closing
+    setTimeout(async () => {
+      try {
+        await ensureHostStream();
+        console.log("Stream refreshed after audio ended");
+      } catch (e) {
+        console.warn("Failed to refresh stream after audio ended:", e);
+      }
+    }, 100);
   }
 });
 
@@ -966,26 +328,115 @@ audioEl.addEventListener("ended", () => {
 localVol.oninput = () => {
   remoteAudio.volume = Number(localVol.value);
 };
-
 localMute.onclick = () => {
   remoteAudio.muted = !remoteAudio.muted;
-  localMute.textContent = remoteAudio.muted ? "🔇" : "🔊";
 };
 
-// Host actions
+// Step-by-step room flow
+let currentStep = 'initial'; // 'initial', 'create-pin', 'join-details'
+
+function showInitialStep() {
+  $("username").style.display = "block";
+  $("roomId").style.display = "none";
+  $("pin").style.display = "none";
+  $("createBtn").style.display = "inline-block";
+  $("joinBtn").style.display = "inline-block";
+  $("createBtn").textContent = "Create as Host";
+  $("joinBtn").textContent = "Join Room";
+  currentStep = 'initial';
+}
+
+function showCreatePinStep() {
+  $("username").style.display = "none";
+  $("roomId").style.display = "none";
+  $("pin").style.display = "block";
+  $("pin").placeholder = "Enter PIN (optional)";
+  $("createBtn").textContent = "Create Room";
+  $("joinBtn").textContent = "Skip PIN";
+  currentStep = 'create-pin';
+}
+
+function showJoinDetailsStep() {
+  $("username").style.display = "none";
+  $("roomId").style.display = "block";
+  $("pin").style.display = "block";
+  $("pin").placeholder = "Enter PIN (if required)";
+  $("createBtn").textContent = "Back";
+  $("joinBtn").textContent = "Join Room";
+  currentStep = 'join-details';
+}
+
+// Room create/join
+$("createBtn").onclick = () => {
+  if (currentStep === 'initial') {
+    const username = $("username").value.trim();
+    if (!username) {
+      alert("Please enter a username");
+      return;
+    }
+    showCreatePinStep();
+  } else if (currentStep === 'create-pin') {
+    const username = $("username").value.trim();
+    const roomId = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    ws.send(JSON.stringify({ 
+      type: "room:create", 
+      roomId: roomId, 
+      pin: $("pin").value || null,
+      username: username
+    }));
+  } else if (currentStep === 'join-details') {
+    showInitialStep();
+  }
+};
+
+$("joinBtn").onclick = () => {
+  if (currentStep === 'initial') {
+    const username = $("username").value.trim();
+    if (!username) {
+      alert("Please enter a username");
+      return;
+    }
+    showJoinDetailsStep();
+  } else if (currentStep === 'create-pin') {
+    // Skip PIN for room creation
+    const username = $("username").value.trim();
+    const roomId = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    ws.send(JSON.stringify({ 
+      type: "room:create", 
+      roomId: roomId, 
+      pin: null,
+      username: username
+    }));
+  } else if (currentStep === 'join-details') {
+    const username = $("username").value.trim();
+    const roomId = $("roomId").value.trim();
+    
+    if (!roomId || !/^\d{6}$/.test(roomId)) {
+      alert("Room ID must be exactly 6 digits");
+      return;
+    }
+    
+    ws.send(JSON.stringify({ 
+      type: "room:join", 
+      roomId: roomId, 
+      pin: $("pin").value || null,
+      username: username
+    }));
+  }
+};
+
+// Initialize UI
+showInitialStep();
+
 transferBtn.onclick = () => {
   const targetId = transferSelect.value;
   if (targetId) ws.send(JSON.stringify({ type: "host:transfer", targetId }));
 };
-
 kickBtn.onclick = () => {
   const targetId = kickSelect.value;
-  if (targetId) {
-    const targetName = kickSelect.options[kickSelect.selectedIndex].text;
-    if (confirm(`Remove ${targetName} from the room?`)) {
-      ws.send(JSON.stringify({ type: "room:kick", targetId }));
-    }
-  }
+  if (targetId) ws.send(JSON.stringify({ type: "room:kick", targetId }));
 };
 
 // Chat
@@ -996,62 +447,33 @@ chatSend.onclick = () => {
   chatInput.value = "";
 };
 
-chatInput.onkeypress = (e) => {
-  if (e.key === "Enter") {
-    chatSend.onclick();
-  }
-};
-
-// WebSocket message handling
 ws.onmessage = async (ev) => {
   const msg = JSON.parse(ev.data);
-
   if (msg.type === "hello") {
     clientId = msg.clientId;
+    me.textContent = "";
     pingLoop();
   }
   else if (msg.type === "error") {
     alert(msg.message);
   }
   else if (msg.type === "room:created") {
-    roomId = msg.roomId;
-    isHost = true;
-    $("createdRoomCode").textContent = roomId;
-    showPage("roomCreated");
+    roomId = msg.roomId; isHost = true;
+    roomLabel.textContent = roomId;
+    hostPanel.classList.remove("hidden");
     logChat(`Created room ${roomId}. You are host.`);
   }
   else if (msg.type === "room:joined") {
-    roomId = msg.roomId;
-    isHost = msg.host === true;
+    roomId = msg.roomId; isHost = msg.host === true;
     hostId = msg.hostId || null;
     roomLabel.textContent = roomId;
-    showPage("room");
-
     updatePresence(msg.clients, msg.hostId, msg.usernames || {});
-
     if (isHost) {
       hostPanel.classList.remove("hidden");
-      // Show host-only controls
-      document.querySelectorAll('.host-only-control').forEach(el => el.classList.remove('hidden'));
-      // Hide listener-only controls
-      document.querySelectorAll('.listener-only-control').forEach(el => el.classList.add('hidden'));
-      // Show playlist controls for host
-      addFilesBtn.style.display = 'block';
-      document.querySelectorAll('.toolbar-btn').forEach(btn => btn.style.display = 'block');
       logChat(`Joined ${roomId} as HOST.`);
     } else {
       hostPanel.classList.add("hidden");
-      // Hide host-only controls
-      document.querySelectorAll('.host-only-control').forEach(el => el.classList.add('hidden'));
-      // Show listener-only controls
-      document.querySelectorAll('.listener-only-control').forEach(el => el.classList.remove('hidden'));
-      // Hide playlist controls for listeners
-      addFilesBtn.style.display = 'none';
-      document.querySelectorAll('.toolbar-btn').forEach(btn => btn.style.display = 'none');
       logChat(`Joined ${roomId} as listener.`);
-      
-      // Request full state sync from host
-      ws.send(JSON.stringify({ type: "sync:request-full-state" }));
     }
   }
   else if (msg.type === "presence:update") {
@@ -1065,8 +487,10 @@ ws.onmessage = async (ev) => {
   else if (msg.type === "webrtc:signal") {
     const { fromId, payload } = msg;
     if (payload.kind === "offer") {
+      // Listener got offer from host
       await listenerHandleOffer(fromId, payload.sdp);
     } else if (payload.kind === "answer") {
+      // Host got answer from peer
       const p = peers.get(fromId);
       if (p) await p.pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
     } else if (payload.kind === "ice") {
@@ -1081,29 +505,22 @@ ws.onmessage = async (ev) => {
   }
   else if (msg.type === "control:playpause") {
     if (!isHost && remoteAudio.srcObject) {
-      const timeDiff = (Date.now() - msg.timestamp) / 1000;
-      const syncTime = msg.currentTime + timeDiff;
-      
-      if (msg.state === "play") {
-        if (Math.abs(remoteAudio.currentTime - syncTime) > 0.2) {
-          remoteAudio.currentTime = syncTime;
-        }
-        remoteAudio.play().catch(()=>{});
-      }
-      if (msg.state === "pause") {
-        remoteAudio.pause();
-      }
+      if (msg.state === "play") remoteAudio.play().catch(()=>{});
+      if (msg.state === "pause") remoteAudio.pause();
     }
   }
   else if (msg.type === "control:seek") {
+    // Note: seeking a live incoming stream isn't meaningful. This message is for cases
+    // where host restarts/realigns content. We gently restart playback.
     if (!isHost && remoteAudio.srcObject) {
-      const timeDiff = (Date.now() - msg.timestamp) / 1000;
-      const syncTime = msg.time + timeDiff;
-      remoteAudio.currentTime = syncTime;
+      // Nothing to seek on remote stream; best effort is to briefly pause/play to re-sync
+      remoteAudio.pause();
+      setTimeout(() => remoteAudio.play().catch(()=>{}), 50);
     }
   }
   else if (msg.type === "control:volume") {
     if (!isHost && remoteAudio.srcObject) {
+      // Apply as *default* remote volume; user can override using Local volume
       if (!remoteAudio.dataset.userVolTouched) {
         remoteAudio.volume = Number(msg.volume);
       }
@@ -1114,74 +531,23 @@ ws.onmessage = async (ev) => {
       remoteAudio.muted = !!msg.muted;
     }
   }
-  else if (msg.type === "sync:full-state") {
-    syncToHostState(msg);
-  }
-  else if (msg.type === "playlist:update") {
-    receivePlaylistUpdate(msg.playlist, msg.currentTrackIndex);
-  }
-  else if (msg.type === "track:update") {
-    if (!isHost) {
-      currentTrackInfo = msg.trackInfo;
-      updateTrackDisplay();
-      logChat(`Now playing: ${currentTrackInfo.title} by ${currentTrackInfo.artist}`);
-      
-      // Ensure remote audio is ready to play
-      if (remoteAudio && remoteAudio.srcObject && remoteAudio.paused) {
-        remoteAudio.play().catch(console.warn);
-      }
-    }
-  }
   else if (msg.type === "host:you-are-now-host") {
     isHost = true;
     hostPanel.classList.remove("hidden");
-    // Show host-only controls
-    document.querySelectorAll('.host-only-control').forEach(el => el.classList.remove('hidden'));
-    // Hide listener-only controls
-    document.querySelectorAll('.listener-only-control').forEach(el => el.classList.add('hidden'));
-    // Show playlist controls for new host
-    addFilesBtn.style.display = 'block';
-    document.querySelectorAll('.toolbar-btn').forEach(btn => btn.style.display = 'block');
-    logChat("You are now the HOST. Add tracks to playlist to start broadcasting.");
-    
-    // Immediately broadcast current state to all listeners
-    setTimeout(() => broadcastFullState(), 100);
+    logChat("You are now the HOST. Load an audio file to start broadcasting.");
   }
   else if (msg.type === "host:attach-all") {
     if (isHost) hostAttachAll(msg.peers || []);
   }
   else if (msg.type === "room:kicked") {
-    alert("You were removed from the room by the host.");
+    alert("You were kicked by the host.");
     location.reload();
   }
   else if (msg.type === "system") {
-    logChat(`[SYSTEM] ${msg.text}`);
+    logChat(`[system] ${msg.text}`);
   }
   else if (msg.type === "chat:new") {
-    logChat(msg.text, msg.from);
-  }
-  else if (msg.type === "sync:request-full-state") {
-    if (isHost && msg.requesterId) {
-      // Send full state to specific requester
-      const fullState = {
-        type: "sync:full-state",
-        trackInfo: currentTrackInfo,
-        currentTrackIndex: currentTrackIndex,
-        playlist: playlist.map(item => ({
-          id: item.id,
-          title: item.title,
-          artist: item.artist,
-          filename: item.filename
-        })),
-        isPlaying: !audioEl.paused,
-        currentTime: audioEl.currentTime,
-        volume: audioEl.volume,
-        muted: audioEl.muted,
-        timestamp: Date.now(),
-        targetId: msg.requesterId
-      };
-      ws.send(JSON.stringify(fullState));
-    }
+    logChat(`${msg.fromName || msg.from}: ${msg.text}`);
   }
   else if (msg.type === "pong") {
     const ms = Date.now() - msg.t;
@@ -1200,8 +566,3 @@ function pingLoop() {
   ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
   setTimeout(pingLoop, 2000);
 }
-
-// Initialize
-showPage("landing");
-updateTrackDisplay();
-updatePlaylistDisplay();
