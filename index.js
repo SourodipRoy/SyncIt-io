@@ -203,6 +203,13 @@ wss.on("connection", (ws) => {
       broadcast(roomId, { type: "chat:new", from: senderUsername, text: data.text }, null);
     }
 
+    else if (data.type === "track:update") {
+      const roomId = inRoom.get(clientId);
+      const room = rooms.get(roomId);
+      if (!room || room.hostId !== clientId) return;
+      broadcast(roomId, { type: "track:update", trackInfo: data.trackInfo }, clientId);
+    }
+
     else if (data.type === "ping") {
       safeSend(ws, { type: "pong", t: data.t });
     }

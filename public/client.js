@@ -1,20 +1,37 @@
+
 const $ = (id) => document.getElementById(id);
 
+// Page management
+const pages = {
+  landing: $("landingPage"),
+  createRoom: $("createRoomPage"),
+  joinRoom: $("joinRoomPage"),
+  roomCreated: $("roomCreatedPage"),
+  room: $("roomPage")
+};
+
+function showPage(pageName) {
+  Object.values(pages).forEach(page => page.classList.add("hidden"));
+  pages[pageName].classList.remove("hidden");
+}
+
+// WebSocket and room state
 const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`);
 let clientId = null;
 let roomId = null;
 let isHost = false;
 let hostId = null;
+let currentTrackInfo = { title: "No track loaded", artist: "Select an audio file to start" };
 
-let pc = null;                // For listener: single RTCPeerConnection receiving from host
-const peers = new Map();      // For host: peerId -> { pc }
-let stream = null;            // Host stream from <audio>.captureStream()
+// WebRTC
+let pc = null;
+const peers = new Map();
+let stream = null;
 
 // UI elements
-const me = $("me");
 const roomLabel = $("roomLabel");
 const hostLabel = $("hostLabel");
-const clientsLabel = $("clients");
+const userCount = $("userCount");
 const rttLabel = $("rtt");
 const hostPanel = $("hostPanel");
 const fileInput = $("fileInput");
@@ -37,11 +54,93 @@ const localMute = $("localMute");
 const chatBox = $("chatBox");
 const chatInput = $("chatInput");
 const chatSend = $("chatSend");
+const trackInfo = $("trackInfo");
+const usersList = $("usersList");
 
-function logChat(line) {
+// Landing page navigation
+$("createRoomBtn").onclick = () => showPage("createRoom");
+$("joinRoomBtn").onclick = () => showPage("joinRoom");
+$("backToLanding1").onclick = () => showPage("landing");
+$("backToLanding2").onclick = () => showPage("landing");
+
+// Room creation flow
+$("createRoomConfirm").onclick = () => {
+  const username = $("hostUsername").value.trim();
+  if (!username) {
+    alert("Please enter your name");
+    return;
+  }
+  
+  const roomId = Math.floor(100000 + Math.random() * 900000).toString();
+  const pin = $("roomPin").value.trim() || null;
+  
+  ws.send(JSON.stringify({
+    type: "room:create",
+    roomId: roomId,
+    pin: pin,
+    username: username
+  }));
+};
+
+// Room joining flow
+$("joinRoomConfirm").onclick = () => {
+  const username = $("guestUsername").value.trim();
+  const roomId = $("joinRoomId").value.trim();
+  
+  if (!username) {
+    alert("Please enter your name");
+    return;
+  }
+  
+  if (!roomId || !/^\d{6}$/.test(roomId)) {
+    alert("Room ID must be exactly 6 digits");
+    return;
+  }
+  
+  const pin = $("joinPin").value.trim() || null;
+  
+  ws.send(JSON.stringify({
+    type: "room:join",
+    roomId: roomId,
+    pin: pin,
+    username: username
+  }));
+};
+
+// Room created success actions
+$("copyRoomCode").onclick = () => {
+  const code = $("createdRoomCode").textContent;
+  navigator.clipboard.writeText(code).then(() => {
+    $("copyRoomCode").textContent = "Copied!";
+    setTimeout(() => {
+      $("copyRoomCode").textContent = "Copy Code";
+    }, 2000);
+  });
+};
+
+$("enterRoom").onclick = () => {
+  showPage("room");
+  updateTrackDisplay();
+};
+
+$("leaveRoom").onclick = () => {
+  location.reload();
+};
+
+// Utility functions
+function logChat(message, sender = null) {
   const div = document.createElement("div");
   div.className = "chat-line";
-  div.textContent = line;
+  
+  if (sender) {
+    div.innerHTML = `
+      <div class="chat-sender">${sender}</div>
+      <div class="chat-message">${message}</div>
+    `;
+  } else {
+    div.innerHTML = `<div class="chat-message">${message}</div>`;
+  }
+  
   chatBox.appendChild(div);
   chatBox.scrollTop = chatBox.scrollHeight;
 }
@@ -53,11 +152,68 @@ function fmtTime(s) {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
+function updateTrackDisplay() {
+  if (trackInfo) {
+    trackInfo.innerHTML = `
+      <div class="track-title">${currentTrackInfo.title}</div>
+      <div class="track-artist">${currentTrackInfo.artist}</div>
+    `;
+  }
+}
+
+function extractTrackInfo(file) {
+  const fileName = file.name;
+  const nameParts = fileName.replace(/\.[^/.]+$/, "").split(" - ");
+  
+  if (nameParts.length >= 2) {
+    return {
+      artist: nameParts[0].trim(),
+      title: nameParts.slice(1).join(" - ").trim()
+    };
+  } else {
+    return {
+      artist: "Unknown Artist",
+      title: nameParts[0].trim()
+    };
+  }
+}
+
+function updateUsersList(users, hostId, usernames = {}) {
+  usersList.innerHTML = "";
+  
+  users.forEach(userId => {
+    const username = usernames[userId] || "Anonymous";
+    const isHostUser = userId === hostId;
+    
+    const userDiv = document.createElement("div");
+    userDiv.className = "user-item";
+    
+    const initial = username.charAt(0).toUpperCase();
+    
+    userDiv.innerHTML = `
+      <div class="user-avatar">${initial}</div>
+      <div class="user-info">
+        <div class="user-name">${username}</div>
+        <div class="user-status">${isHostUser ? "Host" : "Listener"}</div>
+      </div>
+      ${isHostUser ? '<div class="host-badge">HOST</div>' : ""}
+    `;
+    
+    usersList.appendChild(userDiv);
+  });
+  
+  // Update user count
+  userCount.textContent = `${users.length} user${users.length !== 1 ? "s" : ""}`;
+}
+
 // Presence UI
 function updatePresence(list, host, usernames = {}) {
   hostLabel.textContent = host ? (usernames[host] || host.slice(0, 8)) : "—";
-  clientsLabel.textContent = (list || []).map(id => usernames[id] || id.slice(0, 6)).join(", ") || "—";
-  // update selects, exclude self
+  
+  // Update user list
+  updateUsersList(list || [], host, usernames);
+  
+  // Update selects, exclude self
   transferSelect.innerHTML = "";
   kickSelect.innerHTML = "";
   (list || []).forEach(id => {
@@ -75,9 +231,6 @@ function updatePresence(list, host, usernames = {}) {
 
 // Host: prepare capture + create sender PC per peer
 async function ensureHostStream() {
-  // Always create a fresh stream for new audio content
-  // Use <audio>.captureStream() to grab decoded audio
-  // This is supported on modern Chromium/Firefox. Safari 17+ generally OK.
   if (!audioEl.captureStream) {
     alert("Your browser does not support captureStream on <audio>. Try latest Chrome/Firefox.");
     throw new Error("captureStream unsupported");
@@ -85,12 +238,10 @@ async function ensureHostStream() {
   
   const newStream = audioEl.captureStream();
   
-  // Always update tracks for existing connections
   if (peers.size > 0) {
     const newAudioTrack = newStream.getAudioTracks()[0];
     
     if (newAudioTrack) {
-      // Replace tracks in existing peer connections
       for (const [peerId, peerData] of peers) {
         try {
           const senders = peerData.pc.getSenders();
@@ -101,12 +252,10 @@ async function ensureHostStream() {
           if (audioSender) {
             await audioSender.replaceTrack(newAudioTrack);
           } else {
-            // No audio sender found, add the track
             peerData.pc.addTrack(newAudioTrack, newStream);
           }
         } catch (e) {
           console.warn(`Failed to update track for peer ${peerId}:`, e);
-          // If replace fails, recreate the connection
           await hostRecreatePeerConnection(peerId, newStream);
         }
       }
@@ -118,18 +267,15 @@ async function ensureHostStream() {
 }
 
 async function hostRecreatePeerConnection(peerId, newStream) {
-  // Close existing connection
   const existingPeer = peers.get(peerId);
   if (existingPeer) {
     existingPeer.pc.close();
   }
   
-  // Create new connection
   const pcHost = new RTCPeerConnection({
     iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }]
   });
 
-  // Add all tracks to this connection
   newStream.getAudioTracks().forEach(tr => pcHost.addTrack(tr, newStream));
 
   pcHost.onicecandidate = (e) => {
@@ -146,14 +292,12 @@ async function hostRecreatePeerConnection(peerId, newStream) {
 }
 
 async function hostCreateSenderFor(peerId) {
-  // Check if we already have a connection for this peer
   const existingPeer = peers.get(peerId);
   if (existingPeer && existingPeer.pc.connectionState === 'connected') {
     console.log(`Peer ${peerId} already connected, skipping.`);
     return;
   }
   
-  // Close existing connection if it exists but is not connected
   if (existingPeer) {
     existingPeer.pc.close();
   }
@@ -163,7 +307,6 @@ async function hostCreateSenderFor(peerId) {
     iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }]
   });
 
-  // Add all tracks to this connection
   stream.getAudioTracks().forEach(tr => pcHost.addTrack(tr, stream));
 
   pcHost.onicecandidate = (e) => {
@@ -172,11 +315,9 @@ async function hostCreateSenderFor(peerId) {
     }
   };
   
-  // Handle connection state changes
   pcHost.onconnectionstatechange = () => {
     console.log(`Peer ${peerId} connection state: ${pcHost.connectionState}`);
     if (pcHost.connectionState === 'failed' || pcHost.connectionState === 'disconnected') {
-      // Try to reconnect after a short delay
       setTimeout(() => {
         if (peers.has(peerId)) {
           console.log(`Attempting to reconnect to peer ${peerId}`);
@@ -203,7 +344,6 @@ async function hostAttachAll(peerIds) {
 async function ensureListenerPC() {
   if (pc && pc.connectionState === 'connected') return pc;
   
-  // Close existing connection if it's not working
   if (pc) {
     pc.close();
   }
@@ -213,7 +353,6 @@ async function ensureListenerPC() {
   });
 
   pc.ontrack = (e) => {
-    // e.streams[0] should have the host audio
     remoteAudio.srcObject = e.streams[0];
     logChat("Connected to host audio stream.");
   };
@@ -224,14 +363,12 @@ async function ensureListenerPC() {
     }
   };
   
-  // Handle connection state changes
   pc.onconnectionstatechange = () => {
     console.log(`Listener connection state: ${pc.connectionState}`);
     if (pc.connectionState === 'connected') {
       logChat("Audio connection established with host.");
     } else if (pc.connectionState === 'failed' || pc.connectionState === 'disconnected') {
       logChat("Audio connection lost. Waiting for reconnection...");
-      // The host will send a new offer when they load new audio
     }
   };
 
@@ -239,7 +376,7 @@ async function ensureListenerPC() {
 }
 
 async function listenerHandleOffer(fromId, sdp) {
-  hostId = fromId; // sender is host
+  hostId = fromId;
   const pc = await ensureListenerPC();
   await pc.setRemoteDescription(new RTCSessionDescription(sdp));
   const answer = await pc.createAnswer({ offerToReceiveAudio: true });
@@ -251,15 +388,26 @@ async function listenerHandleOffer(fromId, sdp) {
 fileInput.onchange = async () => {
   const f = fileInput.files?.[0];
   if (!f) return;
+  
+  // Extract track info from filename
+  const trackData = extractTrackInfo(f);
+  currentTrackInfo = trackData;
+  updateTrackDisplay();
+  
   const url = URL.createObjectURL(f);
   audioEl.src = url;
   await audioEl.load();
   
-  // Wait for audio to be ready, then update stream for all connected peers
   audioEl.addEventListener('loadeddata', async () => {
     try {
       await ensureHostStream();
-      logChat(`New audio file loaded. Stream updated for all connected peers.`);
+      logChat(`New track loaded: ${currentTrackInfo.title} by ${currentTrackInfo.artist}`);
+      
+      // Broadcast track info to all clients
+      ws.send(JSON.stringify({
+        type: "track:update",
+        trackInfo: currentTrackInfo
+      }));
     } catch (e) {
       console.error('Failed to update stream:', e);
       logChat(`Warning: Failed to update audio stream for some peers.`);
@@ -271,10 +419,12 @@ playBtn.onclick = async () => {
   await audioEl.play();
   ws.send(JSON.stringify({ type: "control:playpause", state: "play" }));
 };
+
 pauseBtn.onclick = () => {
   audioEl.pause();
   ws.send(JSON.stringify({ type: "control:playpause", state: "pause" }));
 };
+
 stopBtn.onclick = () => {
   audioEl.pause();
   audioEl.currentTime = 0;
@@ -286,9 +436,11 @@ volume.oninput = () => {
   audioEl.volume = Number(volume.value);
   ws.send(JSON.stringify({ type: "control:volume", volume: Number(volume.value) }));
 };
+
 muteBtn.onclick = () => {
   audioEl.muted = !audioEl.muted;
   ws.send(JSON.stringify({ type: "control:mute", muted: audioEl.muted }));
+  muteBtn.textContent = audioEl.muted ? "🔇" : "🔊";
 };
 
 seek.oninput = () => {
@@ -308,11 +460,8 @@ audioEl.addEventListener("timeupdate", () => {
   }
 });
 
-// Keep connections alive when audio ends
 audioEl.addEventListener("ended", () => {
   if (isHost && stream) {
-    // Ensure stream stays active even when audio ends
-    // This prevents WebRTC connections from closing
     setTimeout(async () => {
       try {
         await ensureHostStream();
@@ -328,115 +477,26 @@ audioEl.addEventListener("ended", () => {
 localVol.oninput = () => {
   remoteAudio.volume = Number(localVol.value);
 };
+
 localMute.onclick = () => {
   remoteAudio.muted = !remoteAudio.muted;
+  localMute.textContent = remoteAudio.muted ? "🔇" : "🔊";
 };
 
-// Step-by-step room flow
-let currentStep = 'initial'; // 'initial', 'create-pin', 'join-details'
-
-function showInitialStep() {
-  $("username").style.display = "block";
-  $("roomId").style.display = "none";
-  $("pin").style.display = "none";
-  $("createBtn").style.display = "inline-block";
-  $("joinBtn").style.display = "inline-block";
-  $("createBtn").textContent = "Create as Host";
-  $("joinBtn").textContent = "Join Room";
-  currentStep = 'initial';
-}
-
-function showCreatePinStep() {
-  $("username").style.display = "none";
-  $("roomId").style.display = "none";
-  $("pin").style.display = "block";
-  $("pin").placeholder = "Enter PIN (optional)";
-  $("createBtn").textContent = "Create Room";
-  $("joinBtn").textContent = "Skip PIN";
-  currentStep = 'create-pin';
-}
-
-function showJoinDetailsStep() {
-  $("username").style.display = "none";
-  $("roomId").style.display = "block";
-  $("pin").style.display = "block";
-  $("pin").placeholder = "Enter PIN (if required)";
-  $("createBtn").textContent = "Back";
-  $("joinBtn").textContent = "Join Room";
-  currentStep = 'join-details';
-}
-
-// Room create/join
-$("createBtn").onclick = () => {
-  if (currentStep === 'initial') {
-    const username = $("username").value.trim();
-    if (!username) {
-      alert("Please enter a username");
-      return;
-    }
-    showCreatePinStep();
-  } else if (currentStep === 'create-pin') {
-    const username = $("username").value.trim();
-    const roomId = Math.floor(100000 + Math.random() * 900000).toString();
-    
-    ws.send(JSON.stringify({ 
-      type: "room:create", 
-      roomId: roomId, 
-      pin: $("pin").value || null,
-      username: username
-    }));
-  } else if (currentStep === 'join-details') {
-    showInitialStep();
-  }
-};
-
-$("joinBtn").onclick = () => {
-  if (currentStep === 'initial') {
-    const username = $("username").value.trim();
-    if (!username) {
-      alert("Please enter a username");
-      return;
-    }
-    showJoinDetailsStep();
-  } else if (currentStep === 'create-pin') {
-    // Skip PIN for room creation
-    const username = $("username").value.trim();
-    const roomId = Math.floor(100000 + Math.random() * 900000).toString();
-    
-    ws.send(JSON.stringify({ 
-      type: "room:create", 
-      roomId: roomId, 
-      pin: null,
-      username: username
-    }));
-  } else if (currentStep === 'join-details') {
-    const username = $("username").value.trim();
-    const roomId = $("roomId").value.trim();
-    
-    if (!roomId || !/^\d{6}$/.test(roomId)) {
-      alert("Room ID must be exactly 6 digits");
-      return;
-    }
-    
-    ws.send(JSON.stringify({ 
-      type: "room:join", 
-      roomId: roomId, 
-      pin: $("pin").value || null,
-      username: username
-    }));
-  }
-};
-
-// Initialize UI
-showInitialStep();
-
+// Host actions
 transferBtn.onclick = () => {
   const targetId = transferSelect.value;
   if (targetId) ws.send(JSON.stringify({ type: "host:transfer", targetId }));
 };
+
 kickBtn.onclick = () => {
   const targetId = kickSelect.value;
-  if (targetId) ws.send(JSON.stringify({ type: "room:kick", targetId }));
+  if (targetId) {
+    const targetName = kickSelect.options[kickSelect.selectedIndex].text;
+    if (confirm(`Remove ${targetName} from the room?`)) {
+      ws.send(JSON.stringify({ type: "room:kick", targetId }));
+    }
+  }
 };
 
 // Chat
@@ -447,27 +507,38 @@ chatSend.onclick = () => {
   chatInput.value = "";
 };
 
+chatInput.onkeypress = (e) => {
+  if (e.key === "Enter") {
+    chatSend.onclick();
+  }
+};
+
+// WebSocket message handling
 ws.onmessage = async (ev) => {
   const msg = JSON.parse(ev.data);
+  
   if (msg.type === "hello") {
     clientId = msg.clientId;
-    me.textContent = "";
     pingLoop();
   }
   else if (msg.type === "error") {
     alert(msg.message);
   }
   else if (msg.type === "room:created") {
-    roomId = msg.roomId; isHost = true;
-    roomLabel.textContent = roomId;
-    hostPanel.classList.remove("hidden");
+    roomId = msg.roomId;
+    isHost = true;
+    $("createdRoomCode").textContent = roomId;
+    showPage("roomCreated");
     logChat(`Created room ${roomId}. You are host.`);
   }
   else if (msg.type === "room:joined") {
-    roomId = msg.roomId; isHost = msg.host === true;
+    roomId = msg.roomId;
+    isHost = msg.host === true;
     hostId = msg.hostId || null;
     roomLabel.textContent = roomId;
+    showPage("room");
     updatePresence(msg.clients, msg.hostId, msg.usernames || {});
+    
     if (isHost) {
       hostPanel.classList.remove("hidden");
       logChat(`Joined ${roomId} as HOST.`);
@@ -487,10 +558,8 @@ ws.onmessage = async (ev) => {
   else if (msg.type === "webrtc:signal") {
     const { fromId, payload } = msg;
     if (payload.kind === "offer") {
-      // Listener got offer from host
       await listenerHandleOffer(fromId, payload.sdp);
     } else if (payload.kind === "answer") {
-      // Host got answer from peer
       const p = peers.get(fromId);
       if (p) await p.pc.setRemoteDescription(new RTCSessionDescription(payload.sdp));
     } else if (payload.kind === "ice") {
@@ -510,17 +579,13 @@ ws.onmessage = async (ev) => {
     }
   }
   else if (msg.type === "control:seek") {
-    // Note: seeking a live incoming stream isn't meaningful. This message is for cases
-    // where host restarts/realigns content. We gently restart playback.
     if (!isHost && remoteAudio.srcObject) {
-      // Nothing to seek on remote stream; best effort is to briefly pause/play to re-sync
       remoteAudio.pause();
       setTimeout(() => remoteAudio.play().catch(()=>{}), 50);
     }
   }
   else if (msg.type === "control:volume") {
     if (!isHost && remoteAudio.srcObject) {
-      // Apply as *default* remote volume; user can override using Local volume
       if (!remoteAudio.dataset.userVolTouched) {
         remoteAudio.volume = Number(msg.volume);
       }
@@ -529,6 +594,13 @@ ws.onmessage = async (ev) => {
   else if (msg.type === "control:mute") {
     if (!isHost && remoteAudio.srcObject) {
       remoteAudio.muted = !!msg.muted;
+    }
+  }
+  else if (msg.type === "track:update") {
+    if (!isHost) {
+      currentTrackInfo = msg.trackInfo;
+      updateTrackDisplay();
+      logChat(`Now playing: ${currentTrackInfo.title} by ${currentTrackInfo.artist}`);
     }
   }
   else if (msg.type === "host:you-are-now-host") {
@@ -540,14 +612,14 @@ ws.onmessage = async (ev) => {
     if (isHost) hostAttachAll(msg.peers || []);
   }
   else if (msg.type === "room:kicked") {
-    alert("You were kicked by the host.");
+    alert("You were removed from the room by the host.");
     location.reload();
   }
   else if (msg.type === "system") {
-    logChat(`[system] ${msg.text}`);
+    logChat(`[SYSTEM] ${msg.text}`);
   }
   else if (msg.type === "chat:new") {
-    logChat(`${msg.fromName || msg.from}: ${msg.text}`);
+    logChat(msg.text, msg.from);
   }
   else if (msg.type === "pong") {
     const ms = Date.now() - msg.t;
@@ -566,3 +638,7 @@ function pingLoop() {
   ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
   setTimeout(pingLoop, 2000);
 }
+
+// Initialize
+showPage("landing");
+updateTrackDisplay();

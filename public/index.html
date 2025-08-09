@@ -1,82 +1,225 @@
+
 <!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Real-time Multi-Speaker Room</title>
+  <title>SyncStream - Real-time Music Streaming</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="./styles.css" />
 </head>
 <body>
-  <div class="container">
-    <h1>Real-time Music Room</h1>
+  <!-- Landing Page -->
+  <div id="landingPage" class="page">
+    <div class="hero-container">
+      <div class="hero-content">
+        <h1 class="hero-title">SyncStream</h1>
+        <p class="hero-subtitle">Zero-delay music streaming across all your devices</p>
+        <div class="hero-buttons">
+          <button id="createRoomBtn" class="btn-primary">Create Room</button>
+          <button id="joinRoomBtn" class="btn-secondary">Join Room</button>
+        </div>
+        <div class="features">
+          <div class="feature">
+            <div class="feature-icon">🎵</div>
+            <h3>Synchronized Playback</h3>
+            <p>Perfect audio sync across all connected devices</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">🎮</div>
+            <h3>Host Controls</h3>
+            <p>Full control over playback, volume, and track selection</p>
+          </div>
+          <div class="feature">
+            <div class="feature-icon">📱</div>
+            <h3>Multi-Device</h3>
+            <p>Stream on phones, tablets, computers, and smart speakers</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
 
-    <section class="room">
-      <input id="username" placeholder="Username" maxlength="20" required />
-      <input id="roomId" placeholder="Room ID (6 digits)" pattern="[0-9]{6}" maxlength="6" style="display: none;" />
-      <input id="pin" placeholder="Optional PIN" style="display: none;" />
-      <button id="createBtn">Create as Host</button>
-      <button id="joinBtn">Join Room</button>
-      <span id="me"></span>
-    </section>
+  <!-- Create Room Page -->
+  <div id="createRoomPage" class="page hidden">
+    <div class="container">
+      <button id="backToLanding1" class="btn-back">← Back</button>
+      <div class="form-container">
+        <h1>Create Your Room</h1>
+        <div class="form-group">
+          <label for="hostUsername">Your Name</label>
+          <input type="text" id="hostUsername" placeholder="Enter your name" maxlength="20" required />
+        </div>
+        <div class="form-group">
+          <label for="roomPin">Room PIN (Optional)</label>
+          <input type="password" id="roomPin" placeholder="Create a PIN for privacy" maxlength="6" />
+          <small>Leave empty for public room</small>
+        </div>
+        <button id="createRoomConfirm" class="btn-primary full-width">Create Room</button>
+      </div>
+    </div>
+  </div>
 
-    <section class="host-panel hidden" id="hostPanel">
-      <h2>Host Controls</h2>
-      <div class="row">
-        <input type="file" id="fileInput" accept="audio/*" />
-        <button id="playBtn">Play</button>
-        <button id="pauseBtn">Pause</button>
-        <button id="stopBtn">Stop</button>
+  <!-- Join Room Page -->
+  <div id="joinRoomPage" class="page hidden">
+    <div class="container">
+      <button id="backToLanding2" class="btn-back">← Back</button>
+      <div class="form-container">
+        <h1>Join Room</h1>
+        <div class="form-group">
+          <label for="guestUsername">Your Name</label>
+          <input type="text" id="guestUsername" placeholder="Enter your name" maxlength="20" required />
+        </div>
+        <div class="form-group">
+          <label for="joinRoomId">Room Code</label>
+          <input type="text" id="joinRoomId" placeholder="6-digit room code" pattern="[0-9]{6}" maxlength="6" required />
+        </div>
+        <div class="form-group">
+          <label for="joinPin">Room PIN</label>
+          <input type="password" id="joinPin" placeholder="Enter PIN if required" maxlength="6" />
+          <small>Leave empty if room has no PIN</small>
+        </div>
+        <button id="joinRoomConfirm" class="btn-primary full-width">Join Room</button>
       </div>
-      <div class="row">
-        <input type="range" id="seek" min="0" max="100" value="0" />
-        <span id="curTime">0:00</span> / <span id="dur">0:00</span>
-      </div>
-      <div class="row">
-        <label>Volume</label>
-        <input type="range" id="volume" min="0" max="1" step="0.01" value="1" />
-        <button id="muteBtn">Mute/Unmute</button>
-      </div>
-      <div class="row">
-        <label>Transfer host to</label>
-        <select id="transferSelect"></select>
-        <button id="transferBtn">Transfer</button>
-      </div>
-      <div class="row">
-        <label>Kick</label>
-        <select id="kickSelect"></select>
-        <button id="kickBtn">Kick</button>
-      </div>
-      <audio id="audio" crossorigin="anonymous" controls class="hidden"></audio>
-    </section>
+    </div>
+  </div>
 
-    <section class="status">
-      <h2>Room Status</h2>
-      <div>Room: <span id="roomLabel">—</span></div>
-      <div>Host: <span id="hostLabel">—</span></div>
-      <div>Clients: <span id="clients"></span></div>
-      <div>RTT: <span id="rtt">—</span> ms</div>
-    </section>
+  <!-- Room Created Success -->
+  <div id="roomCreatedPage" class="page hidden">
+    <div class="container">
+      <div class="success-container">
+        <div class="success-icon">✅</div>
+        <h1>Room Created!</h1>
+        <div class="room-code-display">
+          <label>Share this code with others:</label>
+          <div class="room-code" id="createdRoomCode">------</div>
+          <button id="copyRoomCode" class="btn-secondary">Copy Code</button>
+        </div>
+        <button id="enterRoom" class="btn-primary">Enter Room</button>
+      </div>
+    </div>
+  </div>
 
-    <section class="chat">
-      <h2>Chat</h2>
-      <div id="chatBox" class="chat-box"></div>
-      <div class="row">
-        <input id="chatInput" placeholder="Type a message..." />
-        <button id="chatSend">Send</button>
-      </div>
-    </section>
+  <!-- Main Room Interface -->
+  <div id="roomPage" class="page hidden">
+    <div class="room-container">
+      <!-- Header -->
+      <header class="room-header">
+        <div class="room-info">
+          <h1>Room <span id="roomLabel">------</span></h1>
+          <div class="room-status">
+            <span>Host: <span id="hostLabel">—</span></span>
+            <span>•</span>
+            <span id="userCount">0 users</span>
+            <span>•</span>
+            <span>RTT: <span id="rtt">—</span>ms</span>
+          </div>
+        </div>
+        <button id="leaveRoom" class="btn-secondary">Leave Room</button>
+      </header>
 
-    <section class="listener">
-      <h2>Listener</h2>
-      <div>
-        <audio id="remoteAudio" autoplay playsinline></audio>
+      <!-- Main Content -->
+      <div class="room-content">
+        <!-- Left Panel: Controls -->
+        <div class="controls-panel">
+          <!-- Host Controls -->
+          <section class="host-panel hidden" id="hostPanel">
+            <h2>Host Controls</h2>
+            <div class="file-upload">
+              <input type="file" id="fileInput" accept="audio/*,video/*" />
+              <label for="fileInput" class="file-upload-label">
+                <span class="upload-icon">📁</span>
+                <span>Upload Audio/Video</span>
+              </label>
+            </div>
+            
+            <div class="playback-controls">
+              <button id="playBtn" class="control-btn">▶️</button>
+              <button id="pauseBtn" class="control-btn">⏸️</button>
+              <button id="stopBtn" class="control-btn">⏹️</button>
+            </div>
+
+            <div class="seek-container">
+              <span id="curTime">0:00</span>
+              <input type="range" id="seek" min="0" max="100" value="0" class="seek-bar" />
+              <span id="dur">0:00</span>
+            </div>
+
+            <div class="volume-container">
+              <span class="volume-icon">🔊</span>
+              <input type="range" id="volume" min="0" max="1" step="0.01" value="1" class="volume-bar" />
+              <button id="muteBtn" class="control-btn-small">🔇</button>
+            </div>
+
+            <div class="host-actions">
+              <div class="action-group">
+                <label>Transfer Host</label>
+                <div class="action-controls">
+                  <select id="transferSelect"></select>
+                  <button id="transferBtn" class="btn-action">Transfer</button>
+                </div>
+              </div>
+              <div class="action-group">
+                <label>Remove User</label>
+                <div class="action-controls">
+                  <select id="kickSelect"></select>
+                  <button id="kickBtn" class="btn-danger">Remove</button>
+                </div>
+              </div>
+            </div>
+
+            <audio id="audio" crossorigin="anonymous" class="hidden"></audio>
+          </section>
+
+          <!-- Listener Controls -->
+          <section class="listener-panel">
+            <h2>Audio Settings</h2>
+            <div class="volume-container">
+              <span class="volume-icon">🔊</span>
+              <input type="range" id="localVol" min="0" max="1" step="0.01" value="1" class="volume-bar" />
+              <button id="localMute" class="control-btn-small">🔇</button>
+            </div>
+            <audio id="remoteAudio" autoplay playsinline class="hidden"></audio>
+          </section>
+
+          <!-- Now Playing -->
+          <section class="now-playing">
+            <h2>Now Playing</h2>
+            <div id="trackInfo" class="track-info">
+              <div class="track-title">No track loaded</div>
+              <div class="track-artist">Select an audio file to start</div>
+            </div>
+            <div class="audio-visualizer" id="visualizer">
+              <div class="visualizer-bar"></div>
+              <div class="visualizer-bar"></div>
+              <div class="visualizer-bar"></div>
+              <div class="visualizer-bar"></div>
+              <div class="visualizer-bar"></div>
+            </div>
+          </section>
+        </div>
+
+        <!-- Right Panel: Users & Chat -->
+        <div class="social-panel">
+          <!-- Users List -->
+          <section class="users-section">
+            <h2>Users in Room</h2>
+            <div id="usersList" class="users-list">
+              <!-- Users will be dynamically added here -->
+            </div>
+          </section>
+
+          <!-- Chat -->
+          <section class="chat-section">
+            <h2>Chat</h2>
+            <div id="chatBox" class="chat-box"></div>
+            <div class="chat-input-container">
+              <input id="chatInput" placeholder="Type a message..." />
+              <button id="chatSend" class="btn-chat">Send</button>
+            </div>
+          </section>
+        </div>
       </div>
-      <div class="row">
-        <label>Local volume</label>
-        <input type="range" id="localVol" min="0" max="1" step="0.01" value="1" />
-        <button id="localMute">Mute/Unmute</button>
-      </div>
-    </section>
+    </div>
   </div>
 
   <script src="./client.js"></script>
