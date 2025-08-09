@@ -702,6 +702,20 @@ body {
   border-color: #F92A53;
 }
 
+/* Host/Listener Controls */
+.host-only-control {
+  display: block;
+}
+
+.listener-only-control {
+  display: block;
+}
+
+.host-only-control.hidden,
+.listener-only-control.hidden {
+  display: none !important;
+}
+
 /* Seek and Volume */
 .seek-container, .volume-container {
   display: flex;
