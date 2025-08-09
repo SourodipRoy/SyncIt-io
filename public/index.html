@@ -126,10 +126,16 @@
             <h2>Host Controls</h2>
             <div class="file-upload">
               <input type="file" id="fileInput" accept="audio/*,video/*" />
-              <label for="fileInput" class="file-upload-label">
-                <span class="upload-icon">📁</span>
-                <span>Upload Audio/Video</span>
-              </label>
+              <div class="file-upload-area" id="fileUploadArea">
+                <div class="upload-content">
+                  <div class="upload-icon">📁</div>
+                  <div class="upload-text">
+                    <h3>Drop files here or</h3>
+                    <label for="fileInput" class="upload-button">Choose Files</label>
+                  </div>
+                  <div class="upload-hint">Supports MP3, MP4, WAV and more</div>
+                </div>
+              </div>
             </div>
             
             <div class="playback-controls">

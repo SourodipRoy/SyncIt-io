@@ -384,17 +384,22 @@ async function listenerHandleOffer(fromId, sdp) {
   ws.send(JSON.stringify({ type: "webrtc:signal", targetId: fromId, payload: { kind: "answer", sdp: answer } }));
 }
 
-// Host control bindings
-fileInput.onchange = async () => {
-  const f = fileInput.files?.[0];
-  if (!f) return;
+// File upload handler function
+async function handleFileUpload(file) {
+  if (!file) return;
+  
+  // Check if file is audio/video
+  if (!file.type.startsWith('audio/') && !file.type.startsWith('video/')) {
+    logChat('Please select an audio or video file.');
+    return;
+  }
   
   // Extract track info from filename
-  const trackData = extractTrackInfo(f);
+  const trackData = extractTrackInfo(file);
   currentTrackInfo = trackData;
   updateTrackDisplay();
   
-  const url = URL.createObjectURL(f);
+  const url = URL.createObjectURL(file);
   audioEl.src = url;
   await audioEl.load();
   
@@ -413,7 +418,52 @@ fileInput.onchange = async () => {
       logChat(`Warning: Failed to update audio stream for some peers.`);
     }
   }, { once: true });
+}
+
+// Host control bindings
+fileInput.onchange = async () => {
+  const f = fileInput.files?.[0];
+  await handleFileUpload(f);
 };
+
+// Drag and drop functionality
+const fileUploadArea = $("fileUploadArea");
+
+if (fileUploadArea) {
+  // Prevent default drag behaviors
+  ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+    fileUploadArea.addEventListener(eventName, (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+    });
+  });
+
+  // Highlight drop area when item is dragged over it
+  ['dragenter', 'dragover'].forEach(eventName => {
+    fileUploadArea.addEventListener(eventName, () => {
+      fileUploadArea.classList.add('drag-over');
+    });
+  });
+
+  ['dragleave', 'drop'].forEach(eventName => {
+    fileUploadArea.addEventListener(eventName, () => {
+      fileUploadArea.classList.remove('drag-over');
+    });
+  });
+
+  // Handle dropped files
+  fileUploadArea.addEventListener('drop', async (e) => {
+    const files = e.dataTransfer.files;
+    if (files.length > 0) {
+      await handleFileUpload(files[0]);
+    }
+  });
+
+  // Make the entire area clickable
+  fileUploadArea.addEventListener('click', () => {
+    fileInput.click();
+  });
+}
 
 playBtn.onclick = async () => {
   await audioEl.play();
