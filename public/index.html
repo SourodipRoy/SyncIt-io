@@ -164,8 +164,8 @@
           <section class="audio-controls">
             <h2>Audio Settings</h2>
             
-            <!-- Playback Controls for Host -->
-            <div class="host-controls-section hidden" id="hostControlsSection">
+            <!-- Playback Controls -->
+            <div class="playback-controls-section" id="playbackControlsSection">
               <div class="control-buttons">
                 <button id="prevBtn" class="control-btn" title="Previous Track">⏮️</button>
                 <button id="playBtn" class="control-btn" title="Play">▶️</button>
@@ -173,14 +173,14 @@
                 <button id="stopBtn" class="control-btn" title="Stop">⏹️</button>
                 <button id="nextBtn" class="control-btn" title="Next Track">⏭️</button>
               </div>
-              
-              <!-- Master Volume -->
-              <div class="volume-container">
-                <span class="volume-icon">🎵</span>
-                <span class="volume-label">Master</span>
-                <input type="range" id="volume" min="0" max="1" step="0.01" value="1" class="volume-bar" />
-                <button id="muteBtn" class="control-btn-small">🔊</button>
-              </div>
+            </div>
+
+            <!-- Master Volume for Host -->
+            <div class="volume-container host-only-control hidden" id="masterVolumeSection">
+              <span class="volume-icon">🎵</span>
+              <span class="volume-label">Master</span>
+              <input type="range" id="volume" min="0" max="1" step="0.01" value="1" class="volume-bar" />
+              <button id="muteBtn" class="control-btn-small">🔊</button>
             </div>
 
             <!-- Seek Bar -->

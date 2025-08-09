@@ -53,7 +53,8 @@ const curTime = $("curTime");
 const dur = $("dur");
 const volume = $("volume");
 const muteBtn = $("muteBtn");
-const hostControlsSection = $("hostControlsSection");
+const playbackControlsSection = $("playbackControlsSection");
+const masterVolumeSection = $("masterVolumeSection");
 const playlistFileInput = $("playlistFileInput");
 const addFilesBtn = $("addFilesBtn");
 const playlistContainer = $("playlistContainer");
@@ -875,11 +876,11 @@ ws.onmessage = async (ev) => {
     
     if (isHost) {
       hostPanel.classList.remove("hidden");
-      hostControlsSection.classList.remove("hidden");
+      masterVolumeSection.classList.remove("hidden");
       logChat(`Joined ${roomId} as HOST.`);
     } else {
       hostPanel.classList.add("hidden");
-      hostControlsSection.classList.add("hidden");
+      masterVolumeSection.classList.add("hidden");
       logChat(`Joined ${roomId} as listener.`);
     }
   }
@@ -942,7 +943,7 @@ ws.onmessage = async (ev) => {
   else if (msg.type === "host:you-are-now-host") {
     isHost = true;
     hostPanel.classList.remove("hidden");
-    hostControlsSection.classList.remove("hidden");
+    masterVolumeSection.classList.remove("hidden");
     logChat("You are now the HOST. Add tracks to playlist to start broadcasting.");
   }
   else if (msg.type === "host:attach-all") {

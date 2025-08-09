@@ -454,7 +454,13 @@ body {
   background: #1a1a1a !important;
 }
 
-.host-controls-section {
+.playback-controls-section {
+  margin-bottom: 1.5rem;
+  padding-bottom: 1.5rem;
+  border-bottom: 1px solid #333;
+}
+
+.host-only-control {
   margin-bottom: 1.5rem;
   padding-bottom: 1.5rem;
   border-bottom: 1px solid #333;
