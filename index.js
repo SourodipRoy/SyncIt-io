@@ -15,8 +15,7 @@ app.use(express.static("public"));
  *     pin: string|null,
  *     hostId: string|null,
  *     clients: Set(clientId),
- *     sockets: Map(clientId -> ws),
- *     usernames: Map(clientId -> username)
+ *     sockets: Map(clientId -> ws)
  *   }
  * }
  */
@@ -26,7 +25,7 @@ const inRoom = new Map();
 
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
-    rooms.set(roomId, { pin: null, hostId: null, clients: new Set(), sockets: new Map(), usernames: new Map() });
+    rooms.set(roomId, { pin: null, hostId: null, clients: new Set(), sockets: new Map() });
   }
   return rooms.get(roomId);
 }
@@ -52,7 +51,6 @@ function dropClient(clientId) {
   const ws = room.sockets.get(clientId);
   room.clients.delete(clientId);
   room.sockets.delete(clientId);
-  room.usernames.delete(clientId); // Remove username as well
   inRoom.delete(clientId);
 
   // If host leaves, pick a new host (first client if any).
@@ -60,13 +58,13 @@ function dropClient(clientId) {
     room.hostId = [...room.clients][0] || null;
     if (room.hostId) {
       safeSend(room.sockets.get(room.hostId), { type: "host:you-are-now-host" });
-      broadcast(roomId, { type: "system", text: `New host: ${room.usernames.get(room.hostId)}` });
+      broadcast(roomId, { type: "system", text: `New host: ${room.hostId.slice(0, 8)}` });
     } else {
       broadcast(roomId, { type: "system", text: "Host left. Room idle." });
     }
   }
 
-  broadcast(roomId, { type: "presence:update", clients: [...room.clients], hostId: room.hostId, usernames: Object.fromEntries(room.usernames) });
+  broadcast(roomId, { type: "presence:update", clients: [...room.clients], hostId: room.hostId });
 }
 
 wss.on("connection", (ws) => {
@@ -83,15 +81,7 @@ wss.on("connection", (ws) => {
     }
 
     if (data.type === "room:create") {
-      let roomId = (data.roomId || "").trim();
-      // Validate room ID to be 6 digits
-      if (roomId && !/^\d{6}$/.test(roomId)) {
-        return safeSend(ws, { type: "error", message: "Room ID must be a 6-digit number." });
-      }
-      if (!roomId) {
-        roomId = Math.floor(100000 + Math.random() * 900000).toString(); // Generate a random 6-digit room ID
-      }
-
+      const roomId = (data.roomId || "").trim() || Math.random().toString(36).slice(2, 8);
       const room = getRoom(roomId);
       if (room.clients.size > 0) {
         return safeSend(ws, { type: "error", message: "Room already exists, pick another ID or join it." });
@@ -100,18 +90,13 @@ wss.on("connection", (ws) => {
       room.hostId = clientId;
       room.clients.add(clientId);
       room.sockets.set(clientId, ws);
-      room.usernames.set(clientId, data.username || "Anonymous"); // Store username
       inRoom.set(clientId, roomId);
       safeSend(ws, { type: "room:created", roomId, host: true });
-      broadcast(roomId, { type: "presence:update", clients: [...room.clients], hostId: room.hostId, usernames: Object.fromEntries(room.usernames) });
+      broadcast(roomId, { type: "presence:update", clients: [...room.clients], hostId: room.hostId });
     }
 
     else if (data.type === "room:join") {
       const roomId = (data.roomId || "").trim();
-      // Validate room ID to be 6 digits
-      if (!/^\d{6}$/.test(roomId)) {
-        return safeSend(ws, { type: "error", message: "Room ID must be a 6-digit number." });
-      }
       if (!rooms.has(roomId)) return safeSend(ws, { type: "error", message: "Room not found." });
 
       const room = rooms.get(roomId);
@@ -120,11 +105,10 @@ wss.on("connection", (ws) => {
       }
       room.clients.add(clientId);
       room.sockets.set(clientId, ws);
-      room.usernames.set(clientId, data.username || "Anonymous"); // Store username
       inRoom.set(clientId, roomId);
 
       safeSend(ws, { type: "room:joined", roomId, host: room.hostId === clientId, hostId: room.hostId, clients: [...room.clients] });
-      broadcast(roomId, { type: "presence:update", clients: [...room.clients], hostId: room.hostId, usernames: Object.fromEntries(room.usernames) });
+      broadcast(roomId, { type: "presence:update", clients: [...room.clients], hostId: room.hostId });
 
       // Ask host to create a WebRTC sender for this new peer
       if (room.hostId && room.hostId !== clientId) {
@@ -179,8 +163,8 @@ wss.on("connection", (ws) => {
       if (!room.clients.has(targetId)) return;
       room.hostId = targetId;
       safeSend(room.sockets.get(targetId), { type: "host:you-are-now-host" });
-      broadcast(roomId, { type: "system", text: `Host transferred to ${room.usernames.get(targetId)}` });
-      broadcast(roomId, { type: "presence:update", clients: [...room.clients], hostId: room.hostId, usernames: Object.fromEntries(room.usernames) });
+      broadcast(roomId, { type: "system", text: `Host transferred to ${targetId.slice(0,8)}` });
+      broadcast(roomId, { type: "presence:update", clients: [...room.clients], hostId: room.hostId });
       // Tell new host to attach senders for everyone
       safeSend(room.sockets.get(targetId), { type: "host:attach-all", peers: [...room.clients].filter(id => id !== targetId) });
     }
@@ -198,9 +182,7 @@ wss.on("connection", (ws) => {
     else if (data.type === "chat:send") {
       const roomId = inRoom.get(clientId);
       if (!roomId) return;
-      const room = rooms.get(roomId);
-      const senderUsername = room.usernames.get(clientId) || "Anonymous";
-      broadcast(roomId, { type: "chat:new", from: senderUsername, text: data.text }, null);
+      broadcast(roomId, { type: "chat:new", from: clientId.slice(0, 6), text: data.text }, null);
     }
 
     else if (data.type === "ping") {
