@@ -2,26 +2,35 @@ import express from "express";
 import { WebSocketServer } from "ws";
 import { createServer } from "http";
 import { v4 as uuid } from "uuid";
+import path from "path";
+import { fileURLToPath } from "url";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const server = createServer(app);
 const wss = new WebSocketServer({ server });
 
 app.use(express.static("public"));
+app.get("/app", (_req, res) => {
+  res.sendFile(path.join(__dirname, "public", "app.html"));
+});
 
 /**
  * rooms = {
- *   [roomId]: {
- *     pin: string|null,
- *     hostId: string|null,
- *     clients: Set(clientId),
- *     sockets: Map(clientId -> ws)
- *   }
+ *   [roomId]: { pin, hostId, clients:Set, sockets:Map }
  * }
  */
 const rooms = new Map();
-/** reverse index clientId -> roomId */
+/** clientId -> roomId */
 const inRoom = new Map();
+/** clientId -> display name */
+const names = new Map();
+
+const safe = (s="") => String(s).slice(0, 48).replace(/[<>\n\r]/g, "");
+const shortId = (id="") => id.slice(0, 8);
+const nameOf = (id) => (safe(names.get(id)) || `User-${shortId(id)}`);
 
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
@@ -33,7 +42,6 @@ function getRoom(roomId) {
 function safeSend(ws, obj) {
   if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
 }
-
 function broadcast(roomId, payload, exceptId = null) {
   const room = rooms.get(roomId);
   if (!room) return;
@@ -42,41 +50,55 @@ function broadcast(roomId, payload, exceptId = null) {
     safeSend(sock, payload);
   }
 }
+function presencePayload(room) {
+  const map = {};
+  for (const cid of room.clients) map[cid] = nameOf(cid);
+  return { clients: [...room.clients], hostId: room.hostId, names: map };
+}
 
 function dropClient(clientId) {
   const roomId = inRoom.get(clientId);
   if (!roomId) return;
   const room = rooms.get(roomId);
   if (!room) return;
-  const ws = room.sockets.get(clientId);
+
   room.clients.delete(clientId);
   room.sockets.delete(clientId);
   inRoom.delete(clientId);
 
-  // If host leaves, pick a new host (first client if any).
   if (room.hostId === clientId) {
     room.hostId = [...room.clients][0] || null;
     if (room.hostId) {
       safeSend(room.sockets.get(room.hostId), { type: "host:you-are-now-host" });
-      broadcast(roomId, { type: "system", text: `New host: ${room.hostId.slice(0, 8)}` });
+      safeSend(room.sockets.get(room.hostId), {
+        type: "host:attach-all",
+        peers: [...room.clients].filter(id => id !== room.hostId)
+      });
+      broadcast(roomId, { type: "system", text: `New host: ${nameOf(room.hostId)}` });
     } else {
       broadcast(roomId, { type: "system", text: "Host left. Room idle." });
     }
   }
 
-  broadcast(roomId, { type: "presence:update", clients: [...room.clients], hostId: room.hostId });
+  broadcast(roomId, { type: "presence:update", ...presencePayload(room) });
 }
 
 wss.on("connection", (ws) => {
   const clientId = uuid();
-
   safeSend(ws, { type: "hello", clientId });
 
-  ws.on("message", (msg) => {
+  ws.on("message", (raw) => {
     let data;
-    try {
-      data = JSON.parse(msg);
-    } catch {
+    try { data = JSON.parse(raw); } catch { return; }
+
+    // set/update display name
+    if (data.type === "profile:set") {
+      names.set(clientId, safe(data.name || ""));
+      const rid = inRoom.get(clientId);
+      if (rid) {
+        const room = rooms.get(rid);
+        broadcast(rid, { type: "presence:update", ...presencePayload(room) });
+      }
       return;
     }
 
@@ -91,8 +113,9 @@ wss.on("connection", (ws) => {
       room.clients.add(clientId);
       room.sockets.set(clientId, ws);
       inRoom.set(clientId, roomId);
-      safeSend(ws, { type: "room:created", roomId, host: true });
-      broadcast(roomId, { type: "presence:update", clients: [...room.clients], hostId: room.hostId });
+
+      safeSend(ws, { type: "room:created", roomId, host: true, ...presencePayload(room) });
+      broadcast(roomId, { type: "presence:update", ...presencePayload(room) });
     }
 
     else if (data.type === "room:join") {
@@ -107,71 +130,51 @@ wss.on("connection", (ws) => {
       room.sockets.set(clientId, ws);
       inRoom.set(clientId, roomId);
 
-      safeSend(ws, { type: "room:joined", roomId, host: room.hostId === clientId, hostId: room.hostId, clients: [...room.clients] });
-      broadcast(roomId, { type: "presence:update", clients: [...room.clients], hostId: room.hostId });
+      safeSend(ws, { type: "room:joined", roomId, host: room.hostId === clientId, hostId: room.hostId, ...presencePayload(room) });
+      broadcast(roomId, { type: "presence:update", ...presencePayload(room) });
 
-      // Ask host to create a WebRTC sender for this new peer
       if (room.hostId && room.hostId !== clientId) {
         safeSend(room.sockets.get(room.hostId), { type: "webrtc:new-peer", peerId: clientId });
       }
+      broadcast(roomId, { type: "system", text: `${nameOf(clientId)} joined.` });
     }
 
     else if (data.type === "webrtc:signal") {
-      // Forward generic signaling messages to a target
       const { targetId, payload } = data;
-      const roomId = inRoom.get(clientId);
-      if (!roomId) return;
-      const room = rooms.get(roomId);
+      const rid = inRoom.get(clientId);
+      if (!rid) return;
+      const room = rooms.get(rid);
       const target = room?.sockets.get(targetId);
       if (target) safeSend(target, { type: "webrtc:signal", fromId: clientId, payload });
     }
 
-    // HOST actions broadcasted as control messages
-    else if (data.type === "control:playpause") {
-      const roomId = inRoom.get(clientId);
-      const room = rooms.get(roomId);
+    else if (data.type === "control:playpause" ||
+             data.type === "control:seek" ||
+             data.type === "control:volume" ||
+             data.type === "control:mute") {
+      const rid = inRoom.get(clientId);
+      const room = rooms.get(rid);
       if (room?.hostId !== clientId) return;
-      broadcast(roomId, { type: "control:playpause", state: data.state, ts: Date.now() }, clientId);
-    }
-
-    else if (data.type === "control:seek") {
-      const roomId = inRoom.get(clientId);
-      const room = rooms.get(roomId);
-      if (room?.hostId !== clientId) return;
-      broadcast(roomId, { type: "control:seek", time: data.time, ts: Date.now() }, clientId);
-    }
-
-    else if (data.type === "control:volume") {
-      const roomId = inRoom.get(clientId);
-      const room = rooms.get(roomId);
-      if (room?.hostId !== clientId) return;
-      broadcast(roomId, { type: "control:volume", volume: data.volume }, clientId);
-    }
-
-    else if (data.type === "control:mute") {
-      const roomId = inRoom.get(clientId);
-      const room = rooms.get(roomId);
-      if (room?.hostId !== clientId) return;
-      broadcast(roomId, { type: "control:mute", muted: data.muted }, clientId);
+      broadcast(rid, { ...data, ts: Date.now() }, clientId);
     }
 
     else if (data.type === "host:transfer") {
-      const roomId = inRoom.get(clientId);
-      const room = rooms.get(roomId);
+      const rid = inRoom.get(clientId);
+      const room = rooms.get(rid);
       if (!room || room.hostId !== clientId) return;
       const targetId = data.targetId;
       if (!room.clients.has(targetId)) return;
+
       room.hostId = targetId;
       safeSend(room.sockets.get(targetId), { type: "host:you-are-now-host" });
-      broadcast(roomId, { type: "system", text: `Host transferred to ${targetId.slice(0,8)}` });
-      broadcast(roomId, { type: "presence:update", clients: [...room.clients], hostId: room.hostId });
-      // Tell new host to attach senders for everyone
       safeSend(room.sockets.get(targetId), { type: "host:attach-all", peers: [...room.clients].filter(id => id !== targetId) });
+      broadcast(rid, { type: "system", text: `Host transferred to ${nameOf(targetId)}` });
+      broadcast(rid, { type: "presence:update", ...presencePayload(room) });
     }
 
     else if (data.type === "room:kick") {
-      const roomId = inRoom.get(clientId);
-      const room = rooms.get(roomId);
+      const rid = inRoom.get(clientId);
+      const room = rooms.get(rid);
       if (!room || room.hostId !== clientId) return;
       const targetId = data.targetId;
       const sock = room.sockets.get(targetId);
@@ -180,9 +183,9 @@ wss.on("connection", (ws) => {
     }
 
     else if (data.type === "chat:send") {
-      const roomId = inRoom.get(clientId);
-      if (!roomId) return;
-      broadcast(roomId, { type: "chat:new", from: clientId.slice(0, 6), text: data.text }, null);
+      const rid = inRoom.get(clientId);
+      if (!rid) return;
+      broadcast(rid, { type: "chat:new", from: nameOf(clientId), text: String(data.text || "").slice(0, 500) });
     }
 
     else if (data.type === "ping") {
@@ -190,13 +193,8 @@ wss.on("connection", (ws) => {
     }
   });
 
-  ws.on("close", () => {
-    dropClient(clientId);
-  });
-
-  ws.on("error", () => {
-    dropClient(clientId);
-  });
+  ws.on("close", () => dropClient(clientId));
+  ws.on("error", () => dropClient(clientId));
 });
 
 const PORT = process.env.PORT || 3000;

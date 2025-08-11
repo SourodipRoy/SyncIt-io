@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>SyncIt — Room</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <div class="bg-glow"></div>
+  <div class="bg-grid"></div>
+
+  <header class="site-header">
+    <div class="container header-inner">
+      <div class="logo">
+        <div class="logo-mark" aria-hidden="true"></div>
+        <span>SyncIt</span>
+      </div>
+      <nav class="nav">
+        <a href="/">Home</a>
+      </nav>
+    </div>
+  </header>
+
+  <main class="container app">
+    <section class="grid-2">
+      <section class="card host-panel hidden" id="hostPanel">
+        <h2 class="card-title">Host Controls</h2>
+
+        <div class="stack gap">
+          <div class="row gap wrap">
+            <input type="file" id="fileInput" accept="audio/*" />
+          </div>
+
+          <!-- Centered icon media controls -->
+          <div class="media-controls" role="group" aria-label="Playback controls">
+            <button id="prevBtn" class="icon-circle" title="Previous" aria-label="Previous">
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                <rect x="5" y="5" width="2" height="14" rx="1" fill="currentColor"></rect>
+                <path d="M19 5L9 12l10 7V5z" fill="currentColor"></path>
+              </svg>
+            </button>
+
+            <button id="playPauseBtn" class="icon-circle icon-accent" title="Play" aria-label="Play">
+              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                <path d="M8 5v14l11-7-11-7z" fill="currentColor"></path>
+              </svg>
+            </button>
+
+            <button id="nextBtn" class="icon-circle" title="Next" aria-label="Next">
+              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                <path d="M5 5l10 7-10 7V5z" fill="currentColor"></path>
+                <rect x="17" y="5" width="2" height="14" rx="1" fill="currentColor"></rect>
+              </svg>
+            </button>
+          </div>
+
+          <div class="row gap center">
+            <input type="range" id="seek" min="0" max="100" value="0" />
+            <span class="time"><span id="curTime">0:00</span> / <span id="dur">0:00</span></span>
+          </div>
+          <div class="row gap center">
+            <label>Volume</label>
+            <input type="range" id="volume" min="0" max="1" step="0.01" value="1" />
+            <button id="muteBtn" class="btn btn-ghost">Mute/Unmute</button>
+          </div>
+          <div class="row gap wrap">
+            <label>Transfer host</label>
+            <select id="transferSelect"></select>
+            <button id="transferBtn" class="btn">Transfer</button>
+          </div>
+          <div class="row gap wrap">
+            <label>Kick</label>
+            <select id="kickSelect"></select>
+            <button id="kickBtn" class="btn btn-ghost">Kick</button>
+          </div>
+          <audio id="audio" crossorigin="anonymous" controls class="hidden"></audio>
+        </div>
+      </section>
+
+      <section class="card status">
+        <h2 class="card-title">Room Status</h2>
+        <div class="status-grid">
+          <div>Room ID</div>
+          <div class="row gap">
+            <span id="roomLabel">—</span>
+            <button id="copyRoom" class="icon-btn" title="Copy Room ID" aria-label="Copy Room ID">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <path d="M16 3H6a2 2 0 0 0-2 2v10h2V5h10V3zm-1 4H9a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z" fill="currentColor"/>
+              </svg>
+            </button>
+          </div>
+
+          <div>Host</div><div id="hostLabel">—</div>
+          <div>Participants</div><div id="clients">—</div>
+          <div>RTT</div><div><span id="rtt">—</span> ms</div>
+          <div>You</div><div id="me">—</div>
+        </div>
+      </section>
+
+      <section class="card chat">
+        <h2 class="card-title">Chat</h2>
+        <div id="chatBox" class="chat-box"></div>
+        <div class="row gap">
+          <input id="chatInput" placeholder="Type a message..." />
+          <button id="chatSend" class="btn">Send</button>
+        </div>
+      </section>
+    </section>
+
+    <!-- Hidden receiver for listeners -->
+    <audio id="remoteAudio" autoplay playsinline class="hidden"></audio>
+  </main>
+
+  <script src="client.js"></script>
+</body>
+</html>

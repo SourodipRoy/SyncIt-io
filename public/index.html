@@ -2,82 +2,187 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>Real-time Multi-Speaker Room</title>
+  <title>SyncIt — Real-time Music Room</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="./styles.css" />
+  <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div class="container">
-    <h1>Real-time Music Room</h1>
+  <div class="bg-glow"></div>
+  <div class="bg-grid"></div>
 
-    <section class="room">
-      <input id="roomId" placeholder="Room ID (e.g. alpha123)" />
-      <input id="pin" placeholder="Optional PIN" />
-      <button id="createBtn">Create as Host</button>
-      <button id="joinBtn">Join Room</button>
-      <span id="me"></span>
-    </section>
+  <header class="site-header">
+    <div class="container header-inner">
+      <div class="logo">
+        <div class="logo-mark" aria-hidden="true"></div>
+        <span>SyncIt</span>
+      </div>
+      <nav class="nav">
+        <a href="#features">Features</a>
+        <a href="#how">How it works</a>
+        <a href="/app" class="pill">Open App</a>
+      </nav>
+    </div>
+  </header>
 
-    <section class="host-panel hidden" id="hostPanel">
-      <h2>Host Controls</h2>
-      <div class="row">
-        <input type="file" id="fileInput" accept="audio/*" />
-        <button id="playBtn">Play</button>
-        <button id="pauseBtn">Pause</button>
-        <button id="stopBtn">Stop</button>
+  <main class="hero">
+    <div class="container hero-inner">
+      <h1>Turn every device into <span class="accent">one perfectly-synced speaker</span>.</h1>
+      <p class="tagline">
+        Create a room, share a 6-digit code, and enjoy sub-100&nbsp;ms drift correction with host-level controls.
+      </p>
+      <div class="cta-row">
+        <button class="btn btn-accent" id="ctaCreate">Create Room</button>
+        <button class="btn btn-ghost" id="ctaJoin">Join Room</button>
       </div>
-      <div class="row">
-        <input type="range" id="seek" min="0" max="100" value="0" />
-        <span id="curTime">0:00</span> / <span id="dur">0:00</span>
-      </div>
-      <div class="row">
-        <label>Volume</label>
-        <input type="range" id="volume" min="0" max="1" step="0.01" value="1" />
-        <button id="muteBtn">Mute/Unmute</button>
-      </div>
-      <div class="row">
-        <label>Transfer host to</label>
-        <select id="transferSelect"></select>
-        <button id="transferBtn">Transfer</button>
-      </div>
-      <div class="row">
-        <label>Kick</label>
-        <select id="kickSelect"></select>
-        <button id="kickBtn">Kick</button>
-      </div>
-      <audio id="audio" crossorigin="anonymous" controls class="hidden"></audio>
-    </section>
 
-    <section class="status">
-      <h2>Room Status</h2>
-      <div>Room: <span id="roomLabel">—</span></div>
-      <div>Host: <span id="hostLabel">—</span></div>
-      <div>Clients: <span id="clients"></span></div>
-      <div>RTT: <span id="rtt">—</span> ms</div>
-    </section>
+      <div class="mini-note">Dark grey theme · Reddish-pink accents · Smooth, minimal UI</div>
 
-    <section class="chat">
-      <h2>Chat</h2>
-      <div id="chatBox" class="chat-box"></div>
-      <div class="row">
-        <input id="chatInput" placeholder="Type a message..." />
-        <button id="chatSend">Send</button>
-      </div>
-    </section>
+      <!-- Features -->
+      <section id="features" class="features">
+        <div class="feature">
+          <div class="feat-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path d="M3 12h4l2-6 4 12 2-6h4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <h3>Ultra-tight Sync</h3>
+          <p>Periodic time beacons + drift compensation keep everyone together (&lt;100&nbsp;ms).</p>
+        </div>
+        <div class="feature">
+          <div class="feat-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path d="M12 3l7 3v6c0 5-3.5 8.5-7 9-3.5-.5-7-4-7-9V6l7-3z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <h3>Secure Rooms</h3>
+          <p>Share a 6-digit code and optional PIN. Codes expire when rooms end.</p>
+        </div>
+        <div class="feature">
+          <div class="feat-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path d="M4 6h16M4 12h16M4 18h16M9 6v6M15 12v6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <h3>Host Control</h3>
+          <p>Play, pause, seek, volume, loop, shuffle, reorder, kick, and transfer host instantly.</p>
+        </div>
+        <div class="feature">
+          <div class="feat-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path d="M7 14a4 4 0 1 1 10 0M3 20a7 7 0 1 1 18 0" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <h3>50+ Listeners</h3>
+          <p>Designed for scale via SFU or data channels with a single shared media source.</p>
+        </div>
+        <div class="feature">
+          <div class="feat-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path d="M21 15a4 4 0 0 1-4 4H8l-5 3V6a4 4 0 0 1 4-4h10a4 4 0 0 1 4 4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/>
+            </svg>
+          </div>
+          <h3>Built-in Chat</h3>
+          <p>Stay in sync and in touch with a simple, lightweight chat for the whole room.</p>
+        </div>
+        <div class="feature">
+          <div class="feat-icon">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path d="M4 9v6h4l5 4V5L8 9H4zM16 9l4 6M20 9l-4 6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+          </div>
+          <h3>Local Mute</h3>
+          <p>Participants can mute locally without affecting the room stream.</p>
+        </div>
+      </section>
+    </div>
+  </main>
 
-    <section class="listener">
-      <h2>Listener</h2>
-      <div>
-        <audio id="remoteAudio" autoplay playsinline></audio>
+  <!-- Modal -->
+  <div class="modal" id="roomModal" aria-hidden="true">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+      <div class="modal-head">
+        <h3 id="modalTitle">Start Listening Together</h3>
+        <button class="icon-btn" title="Close" aria-label="Close" data-close>✕</button>
       </div>
-      <div class="row">
-        <label>Local volume</label>
-        <input type="range" id="localVol" min="0" max="1" step="0.01" value="1" />
-        <button id="localMute">Mute/Unmute</button>
+      <div class="stack gap">
+        <input id="username--modal" placeholder="Username" autocomplete="nickname" />
+        <div id="roomIdRow">
+          <input id="roomId--modal" placeholder="Enter 6-digit Room ID" inputmode="numeric" maxlength="6" />
+        </div>
+        <input id="pin--modal" placeholder="Optional PIN" />
+        <div class="row gap">
+          <button class="btn btn-accent" id="modalContinue">Continue</button>
+        </div>
+        <small class="muted" id="modalHint"></small>
       </div>
-    </section>
+    </div>
   </div>
 
-  <script src="./client.js"></script>
+  <footer class="site-footer">
+    <div class="container footer-inner">
+      <span class="muted">© <span id="year"></span> SyncIt</span>
+      <span class="muted">Made for perfectly-synced rooms.</span>
+    </div>
+  </footer>
+
+  <script>
+    const qs = (q) => document.querySelector(q);
+    const modal = qs('#roomModal');
+    const openModal = () => { modal.setAttribute('aria-hidden','false'); modal.classList.add('open'); };
+    const closeModal = () => { modal.setAttribute('aria-hidden','true'); modal.classList.remove('open'); };
+
+    let mode = "create"; // or "join"
+
+    function setMode(m){
+      mode = m;
+      const title = qs('#modalTitle');
+      const roomRow = qs('#roomIdRow');
+      const hint = qs('#modalHint');
+      const roomInput = qs('#roomId--modal');
+      qs('#username--modal').value = "";
+      qs('#pin--modal').value = "";
+      if (mode === "create") {
+        title.textContent = "Create a Room";
+        roomRow.style.display = "none";          // hide Room ID (auto-generated)
+        roomInput.value = "";
+        hint.textContent = "We’ll generate a 6-digit Room ID and take you straight to the app.";
+      } else {
+        title.textContent = "Join an Existing Room";
+        roomRow.style.display = "";
+        roomInput.placeholder = "Enter 6-digit Room ID";
+        hint.textContent = "Enter the room code and continue to join.";
+      }
+    }
+
+    qs('#ctaCreate')?.addEventListener('click', () => { setMode('create'); openModal(); });
+    qs('#ctaJoin')?.addEventListener('click', () => { setMode('join'); openModal(); });
+
+    modal?.addEventListener('click', (e) => {
+      if (e.target.dataset.close !== undefined || e.target.classList.contains('modal')) closeModal();
+    });
+    modal?.querySelectorAll('[data-close]')?.forEach(btn => btn.addEventListener('click', closeModal));
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModal(); });
+
+    function go(){
+      const user = encodeURIComponent((qs('#username--modal').value || "").trim());
+      const pin  = encodeURIComponent((qs('#pin--modal').value || "").trim());
+
+      let code;
+      if (mode === "create") {
+        code = String(Math.floor(100000 + Math.random() * 900000)); // 6-digit
+      } else {
+        code = (qs('#roomId--modal').value || "").trim();
+        if (!/^\d{6}$/.test(code)) { alert("Please enter a valid 6-digit Room ID."); return; }
+      }
+
+      const url = `/app?role=${mode}&code=${encodeURIComponent(code)}${pin ? `&pin=${pin}`:''}${user ? `&user=${user}`:''}`;
+      location.href = url;
+    }
+    qs('#modalContinue')?.addEventListener('click', go);
+
+    document.getElementById('year').textContent = new Date().getFullYear();
+    setMode('create');
+  </script>
 </body>
 </html>
