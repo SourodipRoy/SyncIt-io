@@ -1,5 +1,9 @@
-// Client for /app — auto-creates/joins with names; listener UI removed.
-// Fix for case #1: when host selects file after peers joined, push track to all peers and renegotiate.
+// SyncIt client — no added latency. Uses <audio>.captureStream() with
+// robust track replacement so:
+//  - If host picks a file after peers join → everyone hears it
+//  - If host changes files mid-session → everyone switches without refresh
+//  - Late joiners get audio immediately
+//  - No artificial sync delay nodes (host hears with minimal latency)
 
 const $ = (id) => document.getElementById(id);
 
@@ -9,15 +13,16 @@ let roomId = null;
 let isHost = false;
 let hostId = null;
 
-let pc = null;                 // listener PC
-const peers = new Map();       // host: peerId -> { pc }
-let stream = null;             // host capture stream
+let pc = null;                        // listener RTCPeerConnection
+const peers = new Map();              // host: peerId -> { pc }
+let stream = null;                    // current capture stream from <audio>
+let currentTrack = null;              // current audio track we send
 
-// URL params
-let pendingURLAction = null;   // { role, code, pin, user }
+// URL params for auto create/join
+let pendingURLAction = null;          // { role, code, pin, user }
 let displayName = "";
 
-// UI
+// UI references
 const me = $("me");
 const roomLabel = $("roomLabel");
 const hostLabel = $("hostLabel");
@@ -35,7 +40,7 @@ const transferSelect = $("transferSelect");
 const transferBtn = $("transferBtn");
 const kickSelect = $("kickSelect");
 const kickBtn = $("kickBtn");
-const remoteAudio = $("remoteAudio"); // hidden receiver
+const remoteAudio = $("remoteAudio"); // hidden element (listener fallback)
 
 // media buttons
 const prevBtn = $("prevBtn");
@@ -97,62 +102,58 @@ function updatePresence(payload) {
   });
 }
 
-/* ------------------ HOST: capture & per-peer senders ----------------- */
-async function ensureHostStream() {
-  if (stream) return stream;
-  if (!audioEl.captureStream && !audioEl.mozCaptureStream) {
+/* ------------------ HOST: captureStream management ------------------ */
+function getCaptureStream() {
+  return audioEl.captureStream ? audioEl.captureStream()
+       : audioEl.mozCaptureStream ? audioEl.mozCaptureStream()
+       : null;
+}
+
+// Ensure we have a capture stream and the *current* audio track.
+// If the track changed (new file), push it to all peers and renegotiate.
+async function ensureHostStreamAndSync() {
+  // 1) Ensure we have a capture stream
+  const cap = getCaptureStream();
+  if (!cap) {
     alert("Your browser does not support captureStream on <audio>. Try latest Chrome/Firefox.");
     throw new Error("captureStream unsupported");
   }
-  stream = (audioEl.captureStream ? audioEl.captureStream() : audioEl.mozCaptureStream());
+  stream = cap;
 
-  // If tracks are added later (e.g., file picked after peers exist), attach & renegotiate.
-  try {
-    stream.addEventListener("addtrack", () => hostSyncStreamToPeers(), { once: false });
-  } catch {}
-  return stream;
-}
+  // 2) Grab the active track (may change when src changes)
+  const newTrack = stream.getAudioTracks()[0] || null;
+  if (!newTrack) return;
 
-// Attach/replace the current audio track to ALL existing peer connections and renegotiate.
-// This fixes the "host picked file after peers joined" silence issue.
-async function hostSyncStreamToPeers() {
-  if (!isHost) return;
-  await ensureHostStream();
-  const track = stream.getAudioTracks()[0];
-  if (!track) return; // no track yet; loadedmetadata/canplay handler will call us again
+  const trackChanged = currentTrack !== newTrack;
+  currentTrack = newTrack;
 
+  // 3) Push to existing peers (replaceTrack if sender exists; else addTrack) + renegotiate
   for (const [peerId, obj] of peers.entries()) {
     const pcHost = obj.pc;
     try {
-      // Replace if a sender exists; otherwise addTrack
       let sender = pcHost.getSenders().find(s => s.track && s.track.kind === "audio");
       if (sender) {
-        if (sender.track !== track) await sender.replaceTrack(track);
+        if (trackChanged) await sender.replaceTrack(currentTrack);
       } else {
-        pcHost.addTrack(track, stream);
+        pcHost.addTrack(currentTrack, stream);
       }
-
-      // Force renegotiation to ensure the remote gets the media
-      const offer = await pcHost.createOffer({ offerToReceiveAudio: false });
-      await pcHost.setLocalDescription(offer);
-      ws.send(JSON.stringify({
-        type: "webrtc:signal",
-        targetId: peerId,
-        payload: { kind: "offer", sdp: offer }
-      }));
+      // (Re)negotiate if this is the first time or track changed
+      if (trackChanged || !obj.negotiatedOnce) {
+        const offer = await pcHost.createOffer({ offerToReceiveAudio: false });
+        await pcHost.setLocalDescription(offer);
+        ws.send(JSON.stringify({ type: "webrtc:signal", targetId: peerId, payload: { kind: "offer", sdp: offer } }));
+        obj.negotiatedOnce = true;
+      }
     } catch (e) {
-      console.error("sync stream to peer failed", peerId, e);
+      console.error("ensureHostStreamAndSync -> peer failed", peerId, e);
     }
   }
 }
 
+// Create sender PC for a new peer (attach current track if present)
 async function hostCreateSenderFor(peerId) {
-  await ensureHostStream();
   const pcHost = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] });
-
-  // If we already have a track, attach it now; if not, addtrack listener will handle later
-  const tr = stream.getAudioTracks()[0];
-  if (tr) pcHost.addTrack(tr, stream);
+  peers.set(peerId, { pc: pcHost, negotiatedOnce: false });
 
   pcHost.onicecandidate = (e) => {
     if (e.candidate) {
@@ -160,23 +161,34 @@ async function hostCreateSenderFor(peerId) {
     }
   };
 
-  peers.set(peerId, { pc: pcHost });
+  // Attach if we already have a track; if not, the next ensureHostStreamAndSync() will add+renegotiate
+  const cap = getCaptureStream();
+  if (cap) {
+    stream = cap;
+    const tr = stream.getAudioTracks()[0];
+    if (tr) {
+      currentTrack = tr;
+      pcHost.addTrack(tr, stream);
+    }
+  }
 
-  // Create initial offer (even if no track yet) so the PC is established.
   const offer = await pcHost.createOffer({ offerToReceiveAudio: false });
   await pcHost.setLocalDescription(offer);
   ws.send(JSON.stringify({ type: "webrtc:signal", targetId: peerId, payload: { kind: "offer", sdp: offer } }));
+  peers.get(peerId).negotiatedOnce = true;
 }
 
 async function hostAttachAll(peerIds) {
-  for (const pid of peerIds) { try { await hostCreateSenderFor(pid); } catch (e) { console.error(e); } }
+  for (const pid of peerIds) {
+    try { await hostCreateSenderFor(pid); } catch (e) { console.error(e); }
+  }
 }
 
-/* ------------------------- LISTENER: single PC ----------------------------- */
+/* ------------------------- LISTENER: single PC --------------------------- */
 async function ensureListenerPC() {
   if (pc) return pc;
   pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] });
-  pc.ontrack = (e) => { remoteAudio.srcObject = e.streams[0]; };
+  pc.ontrack = (e) => { remoteAudio.srcObject = e.streams[0]; remoteAudio.play().catch(()=>{}); };
   pc.onicecandidate = (e) => {
     if (e.candidate) {
       ws.send(JSON.stringify({ type: "webrtc:signal", targetId: hostId, payload: { kind: "ice", candidate: e.candidate } }));
@@ -193,7 +205,7 @@ async function listenerHandleOffer(fromId, sdp) {
   ws.send(JSON.stringify({ type: "webrtc:signal", targetId: fromId, payload: { kind: "answer", sdp: answer } }));
 }
 
-/* --------------------- Host controls: icon buttons ------------------------- */
+/* --------------------- Host controls: icon buttons ----------------------- */
 const icons = {
   play:  '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M8 5v14l11-7-11-7z" fill="currentColor"/></svg>',
   pause: '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M6 5h4v14H6zM14 5h4v14h-4z" fill="currentColor"/></svg>'
@@ -204,24 +216,28 @@ function setPlayPauseIcon() {
   playPauseBtn.title = playing ? "Pause" : "Play";
   playPauseBtn.setAttribute("aria-label", playing ? "Pause" : "Play");
 }
+
 fileInput.onchange = async () => {
   const f = fileInput.files?.[0];
   if (!f) return;
   const url = URL.createObjectURL(f);
   audioEl.src = url;
+  // Wait for metadata so captureStream has a live track, then sync to peers
+  const once = () => {
+    audioEl.removeEventListener("loadedmetadata", once);
+    ensureHostStreamAndSync().catch(console.error);
+    setPlayPauseIcon();
+  };
+  audioEl.addEventListener("loadedmetadata", once);
   await audioEl.load();
-  await ensureHostStream();
-  // If track already exists, push to all existing peers immediately
-  hostSyncStreamToPeers();
-  setPlayPauseIcon();
 };
-// In some browsers the track is only ready after metadata/canplay; hook those to sync again
-audioEl.addEventListener("loadedmetadata", () => { if (isHost) hostSyncStreamToPeers(); });
-audioEl.addEventListener("canplay",        () => { if (isHost) hostSyncStreamToPeers(); });
+// Also catch canplay (some engines expose track there)
+audioEl.addEventListener("canplay", () => { if (isHost) ensureHostStreamAndSync().catch(console.error); });
 
+// Play/Pause
 playPauseBtn.onclick = async () => {
   if (audioEl.paused) {
-    await audioEl.play();
+    try { await audioEl.play(); } catch {}
     ws.send(JSON.stringify({ type: "control:playpause", state: "play" }));
   } else {
     audioEl.pause();
@@ -235,7 +251,7 @@ audioEl.addEventListener("play", setPlayPauseIcon);
 audioEl.addEventListener("pause", setPlayPauseIcon);
 audioEl.addEventListener("ended", setPlayPauseIcon);
 
-/* ------------------------ Seek / volume / mute ---------------------------- */
+// Seek / volume / mute
 seek.oninput = () => {
   if (!audioEl.duration || !isHost) return;
   const t = (Number(seek.value) / 100) * audioEl.duration;
@@ -260,7 +276,7 @@ muteBtn.onclick = () => {
   ws.send(JSON.stringify({ type: "control:mute", muted: audioEl.muted }));
 };
 
-/* ------------------------------ Chat ------------------------------------- */
+// Chat
 const chatBox = $("chatBox");
 const chatInput = $("chatInput");
 const chatSend = $("chatSend");
@@ -271,7 +287,7 @@ chatSend.onclick = () => {
   chatInput.value = "";
 };
 
-/* ---------------------------- WS events ---------------------------------- */
+/* ---------------------------- WS events -------------------------------- */
 ws.onmessage = async (ev) => {
   const msg = JSON.parse(ev.data);
 
@@ -336,6 +352,7 @@ ws.onmessage = async (ev) => {
   }
   else if (msg.type === "control:seek") {
     if (!isHost && remoteAudio.srcObject) {
+      // best-effort nudge for live streams
       remoteAudio.pause();
       setTimeout(() => remoteAudio.play().catch(()=>{}), 50);
     }
@@ -375,7 +392,7 @@ ws.onmessage = async (ev) => {
   }
 };
 
-/* ------------------------- Auto create/join ------------------------------- */
+/* ------------------------- Auto create/join ------------------------------ */
 function attemptAutoAction(){
   if (!pendingURLAction || !clientId || ws.readyState !== WebSocket.OPEN) return;
   const { role, code, pin } = pendingURLAction;
@@ -388,7 +405,7 @@ function attemptAutoAction(){
   pendingURLAction = null;
 }
 
-/* ----------------------------- Ping loop --------------------------------- */
+/* ----------------------------- Ping loop -------------------------------- */
 function pingLoop() {
   if (ws.readyState !== WebSocket.OPEN) return;
   ws.send(JSON.stringify({ type: "ping", t: Date.now() }));
