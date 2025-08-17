@@ -4,7 +4,7 @@
   <meta charset="utf-8" />
   <title>SyncIt — Room</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <link rel="stylesheet" href="styles.css" />
+  <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
   <div class="bg-glow"></div>
@@ -13,105 +13,140 @@
   <header class="site-header">
     <div class="container header-inner">
       <div class="logo">
-        <div class="logo-mark" aria-hidden="true"></div>
+        <img class="logo-mark" src="/images/logo.png" alt="" width="22" height="22" />
         <span>SyncIt</span>
       </div>
-      <nav class="nav">
-        <a href="/">Home</a>
-      </nav>
+      <nav class="nav"><a href="/">Home</a></nav>
     </div>
   </header>
 
   <main class="container app">
     <section class="grid-2">
-      <section class="card host-panel hidden" id="hostPanel">
-        <h2 class="card-title">Host Controls</h2>
+      <!-- Left column: Host controls + Playlist -->
+      <section class="stack gap">
+        <!-- HOST CONTROLS -->
+        <section class="card host-panel hidden" id="hostPanel">
+          <h2 class="card-title">Host Controls</h2>
 
-        <div class="stack gap">
-          <div class="row gap wrap">
-            <input type="file" id="fileInput" accept="audio/*" />
-          </div>
+          <div class="host-body stack gap">
+            <!-- Choose Files button -->
+            <div class="host-upload">
+              <label for="fileInput" class="btn btn-accent host-choose">Choose Files</label>
+              <input type="file" id="fileInput" accept="audio/*" multiple class="visually-hidden" />
+            </div>
 
-          <!-- Centered icon media controls -->
-          <div class="media-controls" role="group" aria-label="Playback controls">
-            <button id="prevBtn" class="icon-circle" title="Previous" aria-label="Previous">
-              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-                <rect x="5" y="5" width="2" height="14" rx="1" fill="currentColor"></rect>
-                <path d="M19 5L9 12l10 7V5z" fill="currentColor"></path>
-              </svg>
-            </button>
+            <!-- Now Playing tile -->
+            <div class="nowplaying" id="nowPlaying">
+              <img src="/images/default-cover.png" alt="" class="np-cover" />
+              <div class="np-meta">
+                <div class="np-title" id="npTitle">No track selected</div>
+                <div class="np-artist" id="npArtist">Unknown Artist</div>
+              </div>
+            </div>
 
-            <button id="playPauseBtn" class="icon-circle icon-accent" title="Play" aria-label="Play">
-              <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
-                <path d="M8 5v14l11-7-11-7z" fill="currentColor"></path>
-              </svg>
-            </button>
+            <!-- Seek + Time -->
+            <div class="host-seek row gap center">
+              <input type="range" id="seek" min="0" max="100" value="0" />
+              <span class="time"><span id="curTime">0:00</span> / <span id="dur">0:00</span></span>
+            </div>
 
-            <button id="nextBtn" class="icon-circle" title="Next" aria-label="Next">
-              <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-                <path d="M5 5l10 7-10 7V5z" fill="currentColor"></path>
-                <rect x="17" y="5" width="2" height="14" rx="1" fill="currentColor"></rect>
-              </svg>
-            </button>
-          </div>
+            <!-- Playback controls -->
+            <div class="media-controls" role="group" aria-label="Playback controls">
+              <button id="prevBtn" class="icon-circle" title="Previous" aria-label="Previous">
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                  <rect x="5" y="5" width="2" height="14" rx="1" fill="currentColor"></rect>
+                  <path d="M19 5L9 12l10 7V5z" fill="currentColor"></path>
+                </svg>
+              </button>
+              <button id="playPauseBtn" class="icon-circle icon-accent" title="Play" aria-label="Play">
+                <svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                  <path d="M8 5v14l11-7-11-7z" fill="currentColor"></path>
+                </svg>
+              </button>
+              <button id="nextBtn" class="icon-circle" title="Next" aria-label="Next">
+                <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+                  <path d="M5 5l10 7-10 7V5z" fill="currentColor"></path>
+                  <rect x="17" y="5" width="2" height="14" rx="1" fill="currentColor"></rect>
+                </svg>
+              </button>
+            </div>
 
-          <div class="row gap center">
-            <input type="range" id="seek" min="0" max="100" value="0" />
-            <span class="time"><span id="curTime">0:00</span> / <span id="dur">0:00</span></span>
+            <!-- Volume + Mute -->
+            <div class="host-volume row gap center">
+              <label>Volume</label>
+              <input type="range" id="volume" min="0" max="1" step="0.01" value="1" />
+              <button id="muteBtn" class="icon-circle sm" title="Mute" aria-label="Mute"></button>
+            </div>
+
+            <!-- Advanced host actions -->
+            <div class="row gap wrap">
+              <label>Transfer host</label>
+              <select id="transferSelect"></select>
+              <button id="transferBtn" class="btn">Transfer</button>
+            </div>
+            <div class="row gap wrap">
+              <label>Kick</label>
+              <select id="kickSelect"></select>
+              <button id="kickBtn" class="btn btn-ghost">Kick</button>
+            </div>
+
+            <audio id="audio" crossorigin="anonymous" controls class="hidden"></audio>
           </div>
-          <div class="row gap center">
-            <label>Volume</label>
-            <input type="range" id="volume" min="0" max="1" step="0.01" value="1" />
-            <button id="muteBtn" class="btn btn-ghost">Mute/Unmute</button>
+        </section>
+
+        <!-- Playlist -->
+        <section class="card playlist" id="playlistCard">
+          <div class="row gap" style="justify-content:space-between; align-items:center">
+            <h2 class="card-title" style="margin:0">Playlist</h2>
+            <div class="row gap">
+              <button id="plLoopOne" class="icon-btn" title="Loop current track" aria-label="Loop current track"></button>
+              <button id="plLoopAll" class="icon-btn" title="Loop playlist" aria-label="Loop playlist"></button>
+              <button id="plShuffle" class="icon-btn" title="Shuffle" aria-label="Shuffle"></button>
+              <button id="plAdd" class="icon-btn" title="Add songs" aria-label="Add songs">
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              </button>
+            </div>
           </div>
-          <div class="row gap wrap">
-            <label>Transfer host</label>
-            <select id="transferSelect"></select>
-            <button id="transferBtn" class="btn">Transfer</button>
-          </div>
-          <div class="row gap wrap">
-            <label>Kick</label>
-            <select id="kickSelect"></select>
-            <button id="kickBtn" class="btn btn-ghost">Kick</button>
-          </div>
-          <audio id="audio" crossorigin="anonymous" controls class="hidden"></audio>
-        </div>
+          <div id="playlist" class="playlist-list"></div>
+        </section>
       </section>
 
-      <section class="card status">
-        <h2 class="card-title">Room Status</h2>
-        <div class="status-grid">
-          <div>Room ID</div>
+      <!-- Right column: Status + Chat -->
+      <section class="stack gap">
+        <section class="card status">
+          <h2 class="card-title">Room Status</h2>
+          <div class="status-grid">
+            <div>Room ID</div>
+            <div class="row gap">
+              <span id="roomLabel">—</span>
+              <button id="copyRoom" class="icon-btn" title="Copy Room ID" aria-label="Copy Room ID">
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                  <path d="M16 3H6a2 2 0 0 0-2 2v10h2V5h10V3zm-1 4H9a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z" fill="currentColor"/>
+                </svg>
+              </button>
+            </div>
+            <div>Host</div><div id="hostLabel">—</div>
+            <div>Participants</div><div id="clients">—</div>
+            <div>RTT</div><div><span id="rtt">—</span> ms</div>
+            <div>You</div><div id="me">—</div>
+          </div>
+        </section>
+
+        <section class="card chat">
+          <h2 class="card-title">Chat</h2>
+          <div id="chatBox" class="chat-box"></div>
           <div class="row gap">
-            <span id="roomLabel">—</span>
-            <button id="copyRoom" class="icon-btn" title="Copy Room ID" aria-label="Copy Room ID">
-              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
-                <path d="M16 3H6a2 2 0 0 0-2 2v10h2V5h10V3zm-1 4H9a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z" fill="currentColor"/>
-              </svg>
-            </button>
+            <input id="chatInput" placeholder="Type a message..." />
+            <button id="chatSend" class="btn">Send</button>
           </div>
-
-          <div>Host</div><div id="hostLabel">—</div>
-          <div>Participants</div><div id="clients">—</div>
-          <div>RTT</div><div><span id="rtt">—</span> ms</div>
-          <div>You</div><div id="me">—</div>
-        </div>
-      </section>
-
-      <section class="card chat">
-        <h2 class="card-title">Chat</h2>
-        <div id="chatBox" class="chat-box"></div>
-        <div class="row gap">
-          <input id="chatInput" placeholder="Type a message..." />
-          <button id="chatSend" class="btn">Send</button>
-        </div>
+        </section>
       </section>
     </section>
 
-    <!-- Hidden receiver for listeners -->
+    <!-- Hidden listener audio -->
     <audio id="remoteAudio" autoplay playsinline class="hidden"></audio>
   </main>
 
-  <script src="client.js"></script>
+  <script src="/client.js"></script>
 </body>
 </html>

@@ -1,10 +1,3 @@
-// SyncIt client — no added latency. Uses <audio>.captureStream() with
-// robust track replacement so:
-//  - If host picks a file after peers join → everyone hears it
-//  - If host changes files mid-session → everyone switches without refresh
-//  - Late joiners get audio immediately
-//  - No artificial sync delay nodes (host hears with minimal latency)
-
 const $ = (id) => document.getElementById(id);
 
 const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}`);
@@ -14,12 +7,19 @@ let isHost = false;
 let hostId = null;
 
 let pc = null;                        // listener RTCPeerConnection
-const peers = new Map();              // host: peerId -> { pc }
-let stream = null;                    // current capture stream from <audio>
-let currentTrack = null;              // current audio track we send
+const peers = new Map();              // host: peerId -> { pc, negotiatedOnce }
+let stream = null;                    // capture stream from <audio>
+let currentTrack = null;              // audio track we send
+
+// Playlist (host is source of truth)
+let playlist = [];                    // host: [{id,name,url}], listeners: [{id,name}]
+let currentIndex = -1;
+let loopTrack = false;
+let loopList = false;
+let shuffleOn = false;
 
 // URL params for auto create/join
-let pendingURLAction = null;          // { role, code, pin, user }
+let pendingURLAction = null;
 let displayName = "";
 
 // UI references
@@ -40,21 +40,30 @@ const transferSelect = $("transferSelect");
 const transferBtn = $("transferBtn");
 const kickSelect = $("kickSelect");
 const kickBtn = $("kickBtn");
-const remoteAudio = $("remoteAudio"); // hidden element (listener fallback)
+const remoteAudio = $("remoteAudio");
+
+// Now Playing UI
+const npTitle = $("npTitle");
+const npArtist = $("npArtist");
 
 // media buttons
 const prevBtn = $("prevBtn");
 const playPauseBtn = $("playPauseBtn");
 const nextBtn = $("nextBtn");
 
+// playlist UI
+const playlistEl = $("playlist");
+const plLoopOneBtn = $("plLoopOne");
+const plLoopAllBtn = $("plLoopAll");
+const plShuffleBtn = $("plShuffle");
+const plAddBtn = $("plAdd");
+
 // copy room id
 $("copyRoom")?.addEventListener("click", async () => {
   try {
     await navigator.clipboard.writeText(roomLabel.textContent.trim());
-    const btn = $("copyRoom");
-    const old = btn.title;
-    btn.title = "Copied!";
-    setTimeout(()=>btn.title=old, 900);
+    const btn = $("copyRoom"); const old = btn.title;
+    btn.title = "Copied!"; setTimeout(()=>btn.title=old, 900);
   } catch {}
 });
 
@@ -102,17 +111,13 @@ function updatePresence(payload) {
   });
 }
 
-/* ------------------ HOST: captureStream management ------------------ */
+/* ----------- HOST: captureStream management + negotiation -------------- */
 function getCaptureStream() {
   return audioEl.captureStream ? audioEl.captureStream()
        : audioEl.mozCaptureStream ? audioEl.mozCaptureStream()
        : null;
 }
-
-// Ensure we have a capture stream and the *current* audio track.
-// If the track changed (new file), push it to all peers and renegotiate.
 async function ensureHostStreamAndSync() {
-  // 1) Ensure we have a capture stream
   const cap = getCaptureStream();
   if (!cap) {
     alert("Your browser does not support captureStream on <audio>. Try latest Chrome/Firefox.");
@@ -120,14 +125,12 @@ async function ensureHostStreamAndSync() {
   }
   stream = cap;
 
-  // 2) Grab the active track (may change when src changes)
   const newTrack = stream.getAudioTracks()[0] || null;
   if (!newTrack) return;
 
   const trackChanged = currentTrack !== newTrack;
   currentTrack = newTrack;
 
-  // 3) Push to existing peers (replaceTrack if sender exists; else addTrack) + renegotiate
   for (const [peerId, obj] of peers.entries()) {
     const pcHost = obj.pc;
     try {
@@ -137,7 +140,7 @@ async function ensureHostStreamAndSync() {
       } else {
         pcHost.addTrack(currentTrack, stream);
       }
-      // (Re)negotiate if this is the first time or track changed
+
       if (trackChanged || !obj.negotiatedOnce) {
         const offer = await pcHost.createOffer({ offerToReceiveAudio: false });
         await pcHost.setLocalDescription(offer);
@@ -149,8 +152,6 @@ async function ensureHostStreamAndSync() {
     }
   }
 }
-
-// Create sender PC for a new peer (attach current track if present)
 async function hostCreateSenderFor(peerId) {
   const pcHost = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] });
   peers.set(peerId, { pc: pcHost, negotiatedOnce: false });
@@ -161,7 +162,6 @@ async function hostCreateSenderFor(peerId) {
     }
   };
 
-  // Attach if we already have a track; if not, the next ensureHostStreamAndSync() will add+renegotiate
   const cap = getCaptureStream();
   if (cap) {
     stream = cap;
@@ -177,7 +177,6 @@ async function hostCreateSenderFor(peerId) {
   ws.send(JSON.stringify({ type: "webrtc:signal", targetId: peerId, payload: { kind: "offer", sdp: offer } }));
   peers.get(peerId).negotiatedOnce = true;
 }
-
 async function hostAttachAll(peerIds) {
   for (const pid of peerIds) {
     try { await hostCreateSenderFor(pid); } catch (e) { console.error(e); }
@@ -205,10 +204,18 @@ async function listenerHandleOffer(fromId, sdp) {
   ws.send(JSON.stringify({ type: "webrtc:signal", targetId: fromId, payload: { kind: "answer", sdp: answer } }));
 }
 
-/* --------------------- Host controls: icon buttons ----------------------- */
+/* --------------------- Icons + mute toggle state ------------------------ */
 const icons = {
   play:  '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M8 5v14l11-7-11-7z" fill="currentColor"/></svg>',
-  pause: '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M6 5h4v14H6zM14 5h4v14h-4z" fill="currentColor"/></svg>'
+  pause: '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M6 5h4v14H6zM14 5h4v14h-4z" fill="currentColor"/></svg>',
+  volOn:'<svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path d="M16 8a4 4 0 0 1 0 8" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
+  volOff:'<svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path d="M19 9l-6 6M13 9l6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  loopOne:'<svg viewBox="0 0 24 24" width="16" height="16"><path d="M7 7h10v4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M7 17h10v-4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><text x="11" y="13" font-size="8" fill="currentColor">1</text></svg>',
+  loopAll:'<svg viewBox="0 0 24 24" width="16" height="16"><path d="M7 7h10l-2-2M17 17H7l2 2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
+  shuffle:'<svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 7h5l3 4-3 4H4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M16 7h4l-2-2m2 2l-2 2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M16 17h4l-2-2m2 2l-2 2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
+  del:'<svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 7h12M9 7v10m6-10v10M10 4h4l1 3H9l1-3z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
+  up:'<svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
+  down:'<svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>'
 };
 function setPlayPauseIcon() {
   const playing = !audioEl.paused && !audioEl.ended;
@@ -216,25 +223,178 @@ function setPlayPauseIcon() {
   playPauseBtn.title = playing ? "Pause" : "Play";
   playPauseBtn.setAttribute("aria-label", playing ? "Pause" : "Play");
 }
+function setMuteIcon(){
+  muteBtn.innerHTML = audioEl.muted ? icons.volOff : icons.volOn;
+  muteBtn.title = audioEl.muted ? "Unmute" : "Mute";
+  muteBtn.setAttribute("aria-label", muteBtn.title);
+}
 
-fileInput.onchange = async () => {
-  const f = fileInput.files?.[0];
-  if (!f) return;
-  const url = URL.createObjectURL(f);
-  audioEl.src = url;
-  // Wait for metadata so captureStream has a live track, then sync to peers
+/* --------------------- Playlist helpers & rendering --------------------- */
+function renderPlaylist() {
+  playlistEl.innerHTML = "";
+  playlist.forEach((item, i) => {
+    const row = document.createElement("div");
+    row.className = "pl-item" + (i === currentIndex ? " active" : "");
+    row.dataset.index = String(i);
+
+    const num = document.createElement("div");
+    num.className = "pl-num";
+    num.textContent = String(i + 1);
+
+    const title = document.createElement("div");
+    title.className = "pl-title";
+    title.textContent = item.name || `Track ${i+1}`;
+
+    const actions = document.createElement("div");
+    actions.className = "pl-actions row gap";
+
+    if (isHost) {
+      const up = document.createElement("button");
+      up.className = "icon-btn"; up.innerHTML = icons.up; up.title = "Move up";
+      up.onclick = (e) => { e.stopPropagation(); moveItem(i, -1); };
+
+      const down = document.createElement("button");
+      down.className = "icon-btn"; down.innerHTML = icons.down; down.title = "Move down";
+      down.onclick = (e) => { e.stopPropagation(); moveItem(i, +1); };
+
+      const del = document.createElement("button");
+      del.className = "icon-btn"; del.innerHTML = icons.del; del.title = "Remove";
+      del.onclick = (e) => { e.stopPropagation(); removeItem(i); };
+
+      actions.append(up, down, del);
+
+      // Click anywhere on row to play
+      row.onclick = () => playIndex(i, true);
+      title.style.cursor = "pointer";
+    }
+
+    row.append(num, title, actions);
+    playlistEl.appendChild(row);
+  });
+
+  // header icon states
+  plLoopOneBtn.innerHTML = icons.loopOne;
+  plLoopAllBtn.innerHTML = icons.loopAll;
+  plShuffleBtn.innerHTML = icons.shuffle;
+  plLoopOneBtn.style.color = loopTrack ? "white" : "var(--muted)";
+  plLoopAllBtn.style.color = loopList ? "white" : "var(--muted)";
+  plShuffleBtn.style.color = shuffleOn ? "white" : "var(--muted)";
+}
+function sendPlaylistState() {
+  if (!isHost) return;
+  const state = {
+    list: playlist.map(({id, name}) => ({ id, name })),
+    currentIndex, loopTrack, loopList, shuffle: shuffleOn
+  };
+  ws.send(JSON.stringify({ type: "playlist:state", state }));
+}
+function addFilesToPlaylist(fileList) {
+  const files = Array.from(fileList || []);
+  if (!files.length) return;
+
+  files.forEach(f => {
+    const url = URL.createObjectURL(f);
+    playlist.push({ id: crypto.randomUUID(), name: f.name, url });
+  });
+
+  // Auto-start if nothing was playing
+  if (currentIndex === -1) {
+    currentIndex = 0;
+    loadCurrentAndPlay(true);
+  }
+
+  renderPlaylist();
+  sendPlaylistState();
+}
+function removeItem(i) {
+  if (i < 0 || i >= playlist.length) return;
+  const wasCurrent = i === currentIndex;
+  playlist.splice(i, 1);
+  if (playlist.length === 0) {
+    currentIndex = -1;
+    audioEl.pause();
+    audioEl.removeAttribute("src");
+    if (npTitle) npTitle.textContent = "No track selected";
+  } else {
+    if (wasCurrent) {
+      if (i >= playlist.length) currentIndex = playlist.length - 1;
+      loadCurrentAndPlay(true);
+    } else if (i < currentIndex) {
+      currentIndex -= 1;
+    }
+  }
+  renderPlaylist();
+  sendPlaylistState();
+}
+function moveItem(i, dir) {
+  const j = i + dir;
+  if (i < 0 || i >= playlist.length || j < 0 || j >= playlist.length) return;
+  const [it] = playlist.splice(i, 1);
+  playlist.splice(j, 0, it);
+  if (currentIndex === i) currentIndex = j;
+  else if (currentIndex === j) currentIndex = i;
+  renderPlaylist();
+  sendPlaylistState();
+}
+function nextIndex() {
+  if (playlist.length === 0) return -1;
+  if (loopTrack && currentIndex !== -1) return currentIndex;
+  if (shuffleOn) {
+    if (playlist.length === 1) return currentIndex;
+    let r; do { r = Math.floor(Math.random()*playlist.length); } while (r === currentIndex);
+    return r;
+  }
+  const n = currentIndex + 1;
+  if (n < playlist.length) return n;
+  return loopList ? 0 : -1;
+}
+function prevIndex() {
+  if (playlist.length === 0) return -1;
+  if (shuffleOn) {
+    if (playlist.length === 1) return currentIndex;
+    let r; do { r = Math.floor(Math.random()*playlist.length); } while (r === currentIndex);
+    return r;
+  }
+  const p = currentIndex - 1;
+  if (p >= 0) return p;
+  return loopList ? playlist.length - 1 : -1;
+}
+function playIndex(i, autoplay=false) {
+  if (!isHost) return;
+  if (i < 0 || i >= playlist.length) return;
+  currentIndex = i;
+  loadCurrentAndPlay(autoplay);
+  renderPlaylist();
+  sendPlaylistState();
+}
+
+// helper to strip extension for nicer title
+function stripExt(name=""){
+  const idx = name.lastIndexOf(".");
+  return idx > 0 ? name.slice(0, idx) : name;
+}
+
+function loadCurrentAndPlay(autoplay) {
+  if (currentIndex < 0 || currentIndex >= playlist.length) return;
+  const item = playlist[currentIndex];
+  if (!item) return;
+  audioEl.src = item.url;
+
+  // Update now playing tile
+  if (npTitle) npTitle.textContent = stripExt(item.name || "No track selected");
+  if (npArtist) npArtist.textContent = "Unknown Artist";
+
   const once = () => {
     audioEl.removeEventListener("loadedmetadata", once);
     ensureHostStreamAndSync().catch(console.error);
+    if (autoplay) audioEl.play().catch(()=>{});
     setPlayPauseIcon();
   };
   audioEl.addEventListener("loadedmetadata", once);
-  await audioEl.load();
-};
-// Also catch canplay (some engines expose track there)
-audioEl.addEventListener("canplay", () => { if (isHost) ensureHostStreamAndSync().catch(console.error); });
+  audioEl.load();
+}
 
-// Play/Pause
+/* -------------------- Host controls & events ---------------------------- */
 playPauseBtn.onclick = async () => {
   if (audioEl.paused) {
     try { await audioEl.play(); } catch {}
@@ -245,13 +405,27 @@ playPauseBtn.onclick = async () => {
   }
   setPlayPauseIcon();
 };
-prevBtn.onclick = () => {};
-nextBtn.onclick = () => {};
+prevBtn.onclick = () => { if (!isHost) return; const i = prevIndex(); if (i !== -1) playIndex(i, true); };
+nextBtn.onclick = () => { if (!isHost) return; const i = nextIndex(); if (i !== -1) playIndex(i, true); };
+
+fileInput.onchange = () => { if (isHost) addFilesToPlaylist(fileInput.files); fileInput.value = ""; };
+plAddBtn.onclick = () => fileInput.click();
+
+plLoopOneBtn.onclick = () => { if (!isHost) return; loopTrack = !loopTrack; renderPlaylist(); sendPlaylistState(); };
+plLoopAllBtn.onclick = () => { if (!isHost) return; loopList = !loopList; renderPlaylist(); sendPlaylistState(); };
+plShuffleBtn.onclick = () => { if (!isHost) return; shuffleOn = !shuffleOn; renderPlaylist(); sendPlaylistState(); };
+
+audioEl.addEventListener("ended", () => {
+  if (!isHost) return;
+  const i = nextIndex();
+  if (i !== -1) playIndex(i, true);
+  else setPlayPauseIcon();
+});
+
 audioEl.addEventListener("play", setPlayPauseIcon);
 audioEl.addEventListener("pause", setPlayPauseIcon);
-audioEl.addEventListener("ended", setPlayPauseIcon);
+audioEl.addEventListener("canplay", () => { if (isHost) ensureHostStreamAndSync().catch(console.error); });
 
-// Seek / volume / mute
 seek.oninput = () => {
   if (!audioEl.duration || !isHost) return;
   const t = (Number(seek.value) / 100) * audioEl.duration;
@@ -267,16 +441,19 @@ audioEl.addEventListener("timeupdate", () => {
     seek.value = "0";
   }
 });
+
 volume.oninput = () => {
   audioEl.volume = Number(volume.value);
   ws.send(JSON.stringify({ type: "control:volume", volume: Number(volume.value) }));
 };
 muteBtn.onclick = () => {
   audioEl.muted = !audioEl.muted;
+  setMuteIcon();
   ws.send(JSON.stringify({ type: "control:mute", muted: audioEl.muted }));
 };
+setMuteIcon();
 
-// Chat
+/* --------------------- Chat -------------------------------------------- */
 const chatBox = $("chatBox");
 const chatInput = $("chatInput");
 const chatSend = $("chatSend");
@@ -307,7 +484,7 @@ ws.onmessage = async (ev) => {
     hostPanel.classList.remove("hidden");
     updatePresence(msg);
     logChat(`Created room ${roomId}. You are host.`);
-    setPlayPauseIcon();
+    setPlayPauseIcon(); setMuteIcon(); renderPlaylist();
   }
   else if (msg.type === "room:joined") {
     roomId = msg.roomId; isHost = msg.host === true;
@@ -320,6 +497,7 @@ ws.onmessage = async (ev) => {
       hostPanel.classList.add("hidden");
       logChat(`Joined ${roomId} as listener.`);
     }
+    renderPlaylist();
   }
   else if (msg.type === "presence:update") {
     updatePresence(msg);
@@ -352,7 +530,6 @@ ws.onmessage = async (ev) => {
   }
   else if (msg.type === "control:seek") {
     if (!isHost && remoteAudio.srcObject) {
-      // best-effort nudge for live streams
       remoteAudio.pause();
       setTimeout(() => remoteAudio.play().catch(()=>{}), 50);
     }
@@ -367,11 +544,22 @@ ws.onmessage = async (ev) => {
       remoteAudio.muted = !!msg.muted;
     }
   }
+  else if (msg.type === "playlist:state") {
+    if (isHost) return; // host is authoritative, ignore echo
+    const { list, currentIndex: idx, loopTrack: lt, loopList: ll, shuffle } = msg.state || {};
+    playlist = (list || []).map(x => ({ id: x.id, name: x.name })); // no URLs on listeners
+    currentIndex = (typeof idx === "number" ? idx : -1);
+    loopTrack = !!lt; loopList = !!ll; shuffleOn = !!shuffle;
+    renderPlaylist();
+  }
+  else if (msg.type === "playlist:request-state") {
+    if (isHost) sendPlaylistState();
+  }
   else if (msg.type === "host:you-are-now-host") {
     isHost = true;
     hostPanel.classList.remove("hidden");
-    logChat("You are now the HOST. Load an audio file to start broadcasting.");
-    setPlayPauseIcon();
+    logChat("You are now the HOST. Load or pick a track to start broadcasting.");
+    renderPlaylist(); setPlayPauseIcon(); setMuteIcon();
   }
   else if (msg.type === "host:attach-all") {
     if (isHost) hostAttachAll(msg.peers || []);

@@ -13,7 +13,7 @@
   <header class="site-header">
     <div class="container header-inner">
       <div class="logo">
-        <div class="logo-mark" aria-hidden="true"></div>
+        <img class="logo-mark" src="images/logo.png" alt="SyncIt logo" width="22" height="22" />
         <span>SyncIt</span>
       </div>
       <nav class="nav">
@@ -26,16 +26,16 @@
 
   <main class="hero">
     <div class="container hero-inner">
-      <h1>Turn every device into <span class="accent">one perfectly-synced speaker</span>.</h1>
+      <h1>Turn your devices into <span class="accent">one perfectly-synced sound system</span>.</h1>
       <p class="tagline">
-        Create a room, share a 6-digit code, and enjoy sub-100&nbsp;ms drift correction with host-level controls.
+        Create a room, share a 6-digit code, and transform phones, tablets, and computers into a synchronized speaker network with sub-100ms precision.
       </p>
       <div class="cta-row">
         <button class="btn btn-accent" id="ctaCreate">Create Room</button>
         <button class="btn btn-ghost" id="ctaJoin">Join Room</button>
       </div>
 
-      <div class="mini-note">Dark grey theme · Reddish-pink accents · Smooth, minimal UI</div>
+      <div class="mini-note">Developer: Sourodip Roy AKA Equilibrium.dev 🎀</div>
 
       <!-- Features -->
       <section id="features" class="features">
@@ -144,7 +144,7 @@
       qs('#pin--modal').value = "";
       if (mode === "create") {
         title.textContent = "Create a Room";
-        roomRow.style.display = "none";          // hide Room ID (auto-generated)
+        roomRow.style.display = "none";
         roomInput.value = "";
         hint.textContent = "We’ll generate a 6-digit Room ID and take you straight to the app.";
       } else {
@@ -167,10 +167,11 @@
     function go(){
       const user = encodeURIComponent((qs('#username--modal').value || "").trim());
       const pin  = encodeURIComponent((qs('#pin--modal').value || "").trim());
+      if (!user) { alert("Username is required."); return; }
 
       let code;
       if (mode === "create") {
-        code = String(Math.floor(100000 + Math.random() * 900000)); // 6-digit
+        code = String(Math.floor(100000 + Math.random() * 900000));
       } else {
         code = (qs('#roomId--modal').value || "").trim();
         if (!/^\d{6}$/.test(code)) { alert("Please enter a valid 6-digit Room ID."); return; }
