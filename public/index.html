@@ -105,7 +105,9 @@
         <h3 id="modalTitle">Start Listening Together</h3>
         <button class="icon-btn" title="Close" aria-label="Close" data-close>✕</button>
       </div>
-      <div class="stack gap">
+
+      <!-- STEP 1: Create/Join form -->
+      <div class="stack gap" id="stepCreate">
         <input id="username--modal" placeholder="Username" autocomplete="nickname" />
         <div id="roomIdRow">
           <input id="roomId--modal" placeholder="Enter 6-digit Room ID" inputmode="numeric" maxlength="6" />
@@ -115,6 +117,39 @@
           <button class="btn btn-accent" id="modalContinue">Continue</button>
         </div>
         <small class="muted" id="modalHint"></small>
+      </div>
+
+      <!-- STEP 2: Review details for Create -->
+      <div class="stack gap hidden" id="stepReview" aria-live="polite">
+        <div class="stack gap">
+          <label>Room ID</label>
+          <div class="row gap">
+            <input id="reviewRoomId" readonly />
+            <button class="icon-btn" id="copyCode" title="Copy Room ID" aria-label="Copy Room ID">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <path d="M16 3H6a2 2 0 0 0-2 2v10h2V5h10V3zm-1 4H9a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z" fill="currentColor"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="stack gap" id="reviewPinRow">
+          <label>PIN</label>
+          <div class="row gap">
+            <input id="reviewPin" readonly />
+            <button class="icon-btn" id="copyPin" title="Copy PIN" aria-label="Copy PIN">
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <path d="M16 3H6a2 2 0 0 0-2 2v10h2V5h10V3zm-1 4H9a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2z" fill="currentColor"/>
+              </svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="row gap" style="justify-content:flex-end">
+          <button class="btn btn-ghost" id="reviewBack">Back</button>
+          <button class="btn btn-accent" id="reviewEnter">Enter Room</button>
+        </div>
+        <small class="muted">Share this Room ID (and PIN if set) with others, then enter the room.</small>
       </div>
     </div>
   </div>
@@ -129,10 +164,34 @@
   <script>
     const qs = (q) => document.querySelector(q);
     const modal = qs('#roomModal');
+    const stepCreate = qs('#stepCreate');
+    const stepReview = qs('#stepReview');
+    const reviewRoomId = qs('#reviewRoomId');
+    const reviewPin = qs('#reviewPin');
+    const reviewPinRow = qs('#reviewPinRow');
+
     const openModal = () => { modal.setAttribute('aria-hidden','false'); modal.classList.add('open'); };
-    const closeModal = () => { modal.setAttribute('aria-hidden','true'); modal.classList.remove('open'); };
+    const closeModal = () => { modal.setAttribute('aria-hidden','true'); modal.classList.remove('open'); resetToCreateStep(); };
 
     let mode = "create"; // or "join"
+    let generatedCode = ""; // holds 6-digit code for create flow
+
+    function showStep(which){
+      if (which === "create") { stepCreate.classList.remove('hidden'); stepReview.classList.add('hidden'); }
+      else { stepCreate.classList.add('hidden'); stepReview.classList.remove('hidden'); }
+    }
+    function resetToCreateStep(){
+      showStep("create");
+      const title = qs('#modalTitle');
+      const hint = qs('#modalHint');
+      if (mode === "create") {
+        title.textContent = "Create a Room";
+        hint.textContent = "We’ll generate a 6-digit Room ID and take you to the app.";
+      } else {
+        title.textContent = "Join an Existing Room";
+        hint.textContent = "Enter the room code and continue to join.";
+      }
+    }
 
     function setMode(m){
       mode = m;
@@ -142,11 +201,13 @@
       const roomInput = qs('#roomId--modal');
       qs('#username--modal').value = "";
       qs('#pin--modal').value = "";
+      generatedCode = "";
+      showStep("create");
       if (mode === "create") {
         title.textContent = "Create a Room";
         roomRow.style.display = "none";
         roomInput.value = "";
-        hint.textContent = "We’ll generate a 6-digit Room ID and take you straight to the app.";
+        hint.textContent = "We’ll generate a 6-digit Room ID and then show it so you can copy/share.";
       } else {
         title.textContent = "Join an Existing Room";
         roomRow.style.display = "";
@@ -166,21 +227,49 @@
 
     function go(){
       const user = encodeURIComponent((qs('#username--modal').value || "").trim());
-      const pin  = encodeURIComponent((qs('#pin--modal').value || "").trim());
+      const pinRaw  = (qs('#pin--modal').value || "").trim();
+      const pin  = encodeURIComponent(pinRaw);
       if (!user) { alert("Username is required."); return; }
 
-      let code;
       if (mode === "create") {
-        code = String(Math.floor(100000 + Math.random() * 900000));
+        // Step 2: show review with generated code & optional pin
+        generatedCode = String(Math.floor(100000 + Math.random() * 900000));
+        reviewRoomId.value = generatedCode;
+        if (pinRaw) {
+          reviewPin.value = pinRaw;
+          reviewPinRow.style.display = "";
+        } else {
+          reviewPin.value = "";
+          reviewPinRow.style.display = "none";
+        }
+        qs('#modalTitle').textContent = "Share Room Details";
+        showStep("review");
+        return;
       } else {
-        code = (qs('#roomId--modal').value || "").trim();
+        // Join flow as before
+        const code = (qs('#roomId--modal').value || "").trim();
         if (!/^\d{6}$/.test(code)) { alert("Please enter a valid 6-digit Room ID."); return; }
+        const url = `/app?role=join&code=${encodeURIComponent(code)}${pin ? `&pin=${pin}`:''}${user ? `&user=${user}`:''}`;
+        location.href = url;
       }
-
-      const url = `/app?role=${mode}&code=${encodeURIComponent(code)}${pin ? `&pin=${pin}`:''}${user ? `&user=${user}`:''}`;
-      location.href = url;
     }
     qs('#modalContinue')?.addEventListener('click', go);
+
+    // Review actions
+    qs('#reviewBack')?.addEventListener('click', () => { resetToCreateStep(); });
+    qs('#reviewEnter')?.addEventListener('click', () => {
+      const user = encodeURIComponent((qs('#username--modal').value || "").trim());
+      const pin  = encodeURIComponent((qs('#pin--modal').value || "").trim());
+      if (!generatedCode) return;
+      const url = `/app?role=create&code=${encodeURIComponent(generatedCode)}${pin ? `&pin=${pin}`:''}${user ? `&user=${user}`:''}`;
+      location.href = url;
+    });
+    qs('#copyCode')?.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(reviewRoomId.value.trim()); } catch {}
+    });
+    qs('#copyPin')?.addEventListener('click', async () => {
+      try { await navigator.clipboard.writeText(reviewPin.value.trim()); } catch {}
+    });
 
     document.getElementById('year').textContent = new Date().getFullYear();
     setMode('create');

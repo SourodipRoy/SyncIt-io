@@ -7,7 +7,7 @@ let isHost = false;
 let hostId = null;
 
 let pc = null;                        // listener RTCPeerConnection
-const peers = new Map();              // host: peerId -> { pc, negotiatedOnce }
+const peers = new Map();              // host: peerId -> { pc }
 let stream = null;                    // capture stream from <audio>
 let currentTrack = null;              // audio track we send
 
@@ -29,11 +29,18 @@ const hostLabel = $("hostLabel");
 const clientsLabel = $("clients");
 const rttLabel = $("rtt");
 const hostPanel = $("hostPanel");
+
+// file pick
+const chooseBtn = $("chooseBtn");
 const fileInput = $("fileInput");
+
 const audioEl = $("audio");
 const seek = $("seek");
 const curTime = $("curTime");
 const dur = $("dur");
+const timeWrap = $("timeWrap");
+const noTrackMsg = $("noTrackMsg");
+
 const volume = $("volume");
 const muteBtn = $("muteBtn");
 const transferSelect = $("transferSelect");
@@ -43,8 +50,13 @@ const kickBtn = $("kickBtn");
 const remoteAudio = $("remoteAudio");
 
 // Now Playing UI
-const npTitle = $("npTitle");
-const npArtist = $("npArtist");
+const coverArt = $("coverArt");
+const trackTitle = $("trackTitle");
+const trackArtist = $("trackArtist");
+
+// Sync buttons
+const syncAllBtn = $("syncAllBtn");
+const resyncBtn = $("resyncBtn");
 
 // media buttons
 const prevBtn = $("prevBtn");
@@ -99,16 +111,34 @@ function updatePresence(payload) {
   hostLabel.textContent = nameFrom(hostId, names);
   clientsLabel.textContent = listParticipants(clients, hostId, names);
 
-  // update selects
-  transferSelect.innerHTML = "";
-  kickSelect.innerHTML = "";
-  (clients || []).forEach(id => {
-    if (id !== clientId) {
-      const n = nameFrom(id, names);
-      const o1 = document.createElement("option"); o1.value = id; o1.text = n; transferSelect.appendChild(o1);
-      const o2 = document.createElement("option"); o2.value = id; o2.text = n; kickSelect.appendChild(o2);
-    }
-  });
+  // toggle sync buttons visibility
+  if (syncAllBtn) syncAllBtn.style.display = isHost ? "" : "none";
+  if (resyncBtn)  resyncBtn.style.display  = !isHost ? "" : "none";
+}
+
+// simple default-cover + author parsing from filename
+function parseMeta(name=""){
+  const base = String(name).replace(/\.[^/.]+$/,"");
+  const parts = base.split(" - ");
+  if (parts.length >= 2) return { author: parts[0].trim(), title: parts.slice(1).join(" - ").trim() };
+  return { author: "Unknown author", title: base || "Unknown Title" };
+}
+function setNoTrackUI(){
+  trackTitle.textContent = "No track selected";
+  trackArtist.textContent = "—";
+  coverArt.src = "/images/default-cover.png";
+  curTime.textContent = "0:00";
+  dur.textContent = "0:00";
+  seek.value = "0";
+  timeWrap.style.display = "";
+  if (noTrackMsg) noTrackMsg.style.display = "none";
+}
+function setHasTrackUI(title, author){
+  trackTitle.textContent = title || "Unknown Title";
+  trackArtist.textContent = author || "Unknown author";
+  coverArt.src = "/images/default-cover.png"; // fallback
+  timeWrap.style.display = "";
+  if (noTrackMsg) noTrackMsg.style.display = "none";
 }
 
 /* ----------- HOST: captureStream management + negotiation -------------- */
@@ -153,6 +183,12 @@ async function ensureHostStreamAndSync() {
   }
 }
 async function hostCreateSenderFor(peerId) {
+  // in case of re-sync, drop old pc
+  if (peers.has(peerId)) {
+    try { peers.get(peerId).pc.close(); } catch {}
+    peers.delete(peerId);
+  }
+
   const pcHost = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] });
   peers.set(peerId, { pc: pcHost, negotiatedOnce: false });
 
@@ -182,12 +218,26 @@ async function hostAttachAll(peerIds) {
     try { await hostCreateSenderFor(pid); } catch (e) { console.error(e); }
   }
 }
+async function hostReconnectPeer(peerId) {
+  try { await hostCreateSenderFor(peerId); } catch (e) { console.error(e); }
+}
+async function hostReconnectAll() {
+  for (const pid of peers.keys()) await hostReconnectPeer(pid);
+}
 
 /* ------------------------- LISTENER: single PC --------------------------- */
 async function ensureListenerPC() {
   if (pc) return pc;
   pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] });
-  pc.ontrack = (e) => { remoteAudio.srcObject = e.streams[0]; remoteAudio.play().catch(()=>{}); };
+  pc.ontrack = (e) => {
+    // Prefer tiny playout delay
+    const recs = pc.getReceivers();
+    if (recs[0] && "playoutDelayHint" in recs[0]) {
+      try { recs[0].playoutDelayHint = 0.12; } catch {}
+    }
+    remoteAudio.srcObject = e.streams[0];
+    remoteAudio.play().catch(()=>{});
+  };
   pc.onicecandidate = (e) => {
     if (e.candidate) {
       ws.send(JSON.stringify({ type: "webrtc:signal", targetId: hostId, payload: { kind: "ice", candidate: e.candidate } }));
@@ -202,20 +252,22 @@ async function listenerHandleOffer(fromId, sdp) {
   const answer = await pc.createAnswer({ offerToReceiveAudio: true });
   await pc.setLocalDescription(answer);
   ws.send(JSON.stringify({ type: "webrtc:signal", targetId: fromId, payload: { kind: "answer", sdp: answer } }));
+  remoteAudio.pause();
+  setTimeout(() => remoteAudio.play().catch(()=>{}), 60);
 }
 
 /* --------------------- Icons + mute toggle state ------------------------ */
 const icons = {
-  play:  '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M8 5v14l11-7-11-7z" fill="currentColor"/></svg>',
-  pause: '<svg viewBox="0 0 24 24" width="22" height="22"><path d="M6 5h4v14H6zM14 5h4v14h-4z" fill="currentColor"/></svg>',
-  volOn:'<svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path d="M16 8a4 4 0 0 1 0 8" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
-  volOff:'<svg viewBox="0 0 24 24" width="18" height="18"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path d="M19 9l-6 6M13 9l6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
-  loopOne:'<svg viewBox="0 0 24 24" width="16" height="16"><path d="M7 7h10v4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M7 17h10v-4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><text x="11" y="13" font-size="8" fill="currentColor">1</text></svg>',
-  loopAll:'<svg viewBox="0 0 24 24" width="16" height="16"><path d="M7 7h10l-2-2M17 17H7l2 2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
-  shuffle:'<svg viewBox="0 0 24 24" width="16" height="16"><path d="M4 7h5l3 4-3 4H4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M16 7h4l-2-2m2 2l-2 2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/><path d="M16 17h4l-2-2m2 2l-2 2" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
-  del:'<svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 7h12M9 7v10m6-10v10M10 4h4l1 3H9l1-3z" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
-  up:'<svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
-  down:'<svg viewBox="0 0 24 24" width="16" height="16"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>'
+  play:  '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M8 5v14l11-7-11-7z" fill="currentColor"/></svg>',
+  pause: '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path d="M6 5h4v14H6zM14 5h4v14h-4z" fill="currentColor"/></svg>',
+  volOn:'<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path d="M16 8a4 4 0 0 1 0 8" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
+  volOff:'<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M4 9v6h4l5 4V5L8 9H4z" fill="currentColor"/><path d="M19 9l-6 6M13 9l6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>',
+  loopOne:'<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M17 3l4 4-4 4M7 21l-4-4 4-4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/><text x="12" y="13" font-size="8" text-anchor="middle" fill="currentColor">1</text></svg>',
+  loopAll:'<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M17 3l4 4-4 4M7 21l-4-4 4-4" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  shuffle:'<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><path d="M3 6h6l4 6 4 6h4M3 18h6l4-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>',
+  del:'<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true"><polyline points="3 6 5 6 21 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 6l1 14a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2L19 6" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M10 11v6M14 11v6" stroke="currentColor" stroke-width="2"/></svg>',
+  up:'<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 15l6-6 6 6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>',
+  down:'<svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><path d="M6 9l6 6 6-6" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round"/></svg>'
 };
 function setPlayPauseIcon() {
   const playing = !audioEl.paused && !audioEl.ended;
@@ -263,7 +315,6 @@ function renderPlaylist() {
 
       actions.append(up, down, del);
 
-      // Click anywhere on row to play
       row.onclick = () => playIndex(i, true);
       title.style.cursor = "pointer";
     }
@@ -279,7 +330,23 @@ function renderPlaylist() {
   plLoopOneBtn.style.color = loopTrack ? "white" : "var(--muted)";
   plLoopAllBtn.style.color = loopList ? "white" : "var(--muted)";
   plShuffleBtn.style.color = shuffleOn ? "white" : "var(--muted)";
+
+  // listeners cannot add; toggles are view-only
+  if (isHost) {
+    plAddBtn.style.display = "";
+    plLoopOneBtn.classList.remove("disabled");
+    plLoopAllBtn.classList.remove("disabled");
+    plShuffleBtn.classList.remove("disabled");
+  } else {
+    plAddBtn.style.display = "none";
+    plLoopOneBtn.classList.add("disabled");
+    plLoopAllBtn.classList.add("disabled");
+    plShuffleBtn.classList.add("disabled");
+  }
+
+  if (currentIndex === -1) setNoTrackUI();
 }
+
 function sendPlaylistState() {
   if (!isHost) return;
   const state = {
@@ -288,6 +355,7 @@ function sendPlaylistState() {
   };
   ws.send(JSON.stringify({ type: "playlist:state", state }));
 }
+
 function addFilesToPlaylist(fileList) {
   const files = Array.from(fileList || []);
   if (!files.length) return;
@@ -297,7 +365,6 @@ function addFilesToPlaylist(fileList) {
     playlist.push({ id: crypto.randomUUID(), name: f.name, url });
   });
 
-  // Auto-start if nothing was playing
   if (currentIndex === -1) {
     currentIndex = 0;
     loadCurrentAndPlay(true);
@@ -306,15 +373,20 @@ function addFilesToPlaylist(fileList) {
   renderPlaylist();
   sendPlaylistState();
 }
+
 function removeItem(i) {
   if (i < 0 || i >= playlist.length) return;
   const wasCurrent = i === currentIndex;
-  playlist.splice(i, 1);
+
+  const [removed] = playlist.splice(i, 1);
+  if (removed?.url) { try { URL.revokeObjectURL(removed.url); } catch {} }
+
   if (playlist.length === 0) {
     currentIndex = -1;
     audioEl.pause();
     audioEl.removeAttribute("src");
-    if (npTitle) npTitle.textContent = "No track selected";
+    audioEl.load();
+    setNoTrackUI();
   } else {
     if (wasCurrent) {
       if (i >= playlist.length) currentIndex = playlist.length - 1;
@@ -326,6 +398,7 @@ function removeItem(i) {
   renderPlaylist();
   sendPlaylistState();
 }
+
 function moveItem(i, dir) {
   const j = i + dir;
   if (i < 0 || i >= playlist.length || j < 0 || j >= playlist.length) return;
@@ -336,6 +409,7 @@ function moveItem(i, dir) {
   renderPlaylist();
   sendPlaylistState();
 }
+
 function nextIndex() {
   if (playlist.length === 0) return -1;
   if (loopTrack && currentIndex !== -1) return currentIndex;
@@ -348,6 +422,7 @@ function nextIndex() {
   if (n < playlist.length) return n;
   return loopList ? 0 : -1;
 }
+
 function prevIndex() {
   if (playlist.length === 0) return -1;
   if (shuffleOn) {
@@ -359,6 +434,7 @@ function prevIndex() {
   if (p >= 0) return p;
   return loopList ? playlist.length - 1 : -1;
 }
+
 function playIndex(i, autoplay=false) {
   if (!isHost) return;
   if (i < 0 || i >= playlist.length) return;
@@ -368,22 +444,15 @@ function playIndex(i, autoplay=false) {
   sendPlaylistState();
 }
 
-// helper to strip extension for nicer title
-function stripExt(name=""){
-  const idx = name.lastIndexOf(".");
-  return idx > 0 ? name.slice(0, idx) : name;
-}
-
 function loadCurrentAndPlay(autoplay) {
-  if (currentIndex < 0 || currentIndex >= playlist.length) return;
+  if (currentIndex < 0 || currentIndex >= playlist.length) { setNoTrackUI(); return; }
   const item = playlist[currentIndex];
-  if (!item) return;
+  if (!item) { setNoTrackUI(); return; }
+
+  const meta = parseMeta(item.name || "");
+  setHasTrackUI(meta.title, meta.author);
+
   audioEl.src = item.url;
-
-  // Update now playing tile
-  if (npTitle) npTitle.textContent = stripExt(item.name || "No track selected");
-  if (npArtist) npArtist.textContent = "Unknown Artist";
-
   const once = () => {
     audioEl.removeEventListener("loadedmetadata", once);
     ensureHostStreamAndSync().catch(console.error);
@@ -396,6 +465,7 @@ function loadCurrentAndPlay(autoplay) {
 
 /* -------------------- Host controls & events ---------------------------- */
 playPauseBtn.onclick = async () => {
+  if (!isHost || currentIndex === -1 || !audioEl.src) return;
   if (audioEl.paused) {
     try { await audioEl.play(); } catch {}
     ws.send(JSON.stringify({ type: "control:playpause", state: "play" }));
@@ -408,8 +478,8 @@ playPauseBtn.onclick = async () => {
 prevBtn.onclick = () => { if (!isHost) return; const i = prevIndex(); if (i !== -1) playIndex(i, true); };
 nextBtn.onclick = () => { if (!isHost) return; const i = nextIndex(); if (i !== -1) playIndex(i, true); };
 
+chooseBtn.onclick = () => { if (!isHost) return; fileInput.click(); };
 fileInput.onchange = () => { if (isHost) addFilesToPlaylist(fileInput.files); fileInput.value = ""; };
-plAddBtn.onclick = () => fileInput.click();
 
 plLoopOneBtn.onclick = () => { if (!isHost) return; loopTrack = !loopTrack; renderPlaylist(); sendPlaylistState(); };
 plLoopAllBtn.onclick = () => { if (!isHost) return; loopList = !loopList; renderPlaylist(); sendPlaylistState(); };
@@ -432,12 +502,15 @@ seek.oninput = () => {
   audioEl.currentTime = t;
   ws.send(JSON.stringify({ type: "control:seek", time: t }));
 };
+
 audioEl.addEventListener("timeupdate", () => {
   if (audioEl.duration) {
     dur.textContent = fmtTime(audioEl.duration);
     curTime.textContent = fmtTime(audioEl.currentTime);
     seek.value = String((audioEl.currentTime / audioEl.duration) * 100);
   } else {
+    curTime.textContent = "0:00";
+    dur.textContent = "0:00";
     seek.value = "0";
   }
 });
@@ -453,8 +526,25 @@ muteBtn.onclick = () => {
 };
 setMuteIcon();
 
+/* --------------------- Re-sync buttons (re-join quality) ---------------- */
+if (syncAllBtn) {
+  syncAllBtn.addEventListener("click", () => {
+    if (!isHost) return;
+    ws.send(JSON.stringify({ type: "sync:reconnect-all" }));
+  });
+}
+if (resyncBtn) {
+  resyncBtn.addEventListener("click", () => {
+    if (isHost) return;
+    // kill local pc & audio; host will create a fresh offer
+    try { pc?.close(); } catch {}
+    pc = null;
+    try { remoteAudio.pause(); remoteAudio.srcObject = null; } catch {}
+    ws.send(JSON.stringify({ type: "sync:request-reconnect" }));
+  });
+}
+
 /* --------------------- Chat -------------------------------------------- */
-const chatBox = $("chatBox");
 const chatInput = $("chatInput");
 const chatSend = $("chatSend");
 chatSend.onclick = () => {
@@ -485,6 +575,7 @@ ws.onmessage = async (ev) => {
     updatePresence(msg);
     logChat(`Created room ${roomId}. You are host.`);
     setPlayPauseIcon(); setMuteIcon(); renderPlaylist();
+    setNoTrackUI();
   }
   else if (msg.type === "room:joined") {
     roomId = msg.roomId; isHost = msg.host === true;
@@ -564,15 +655,18 @@ ws.onmessage = async (ev) => {
   else if (msg.type === "host:attach-all") {
     if (isHost) hostAttachAll(msg.peers || []);
   }
+  else if (msg.type === "sync:host-reconnect-all") {
+    if (isHost) hostReconnectAll();
+  }
+  else if (msg.type === "sync:host-reconnect-peer") {
+    if (isHost && msg.peerId) hostReconnectPeer(msg.peerId);
+  }
   else if (msg.type === "room:kicked") {
     alert("You were kicked by the host.");
     location.reload();
   }
   else if (msg.type === "system") {
     logChat(`[system] ${msg.text}`);
-  }
-  else if (msg.type === "chat:new") {
-    logChat(`${msg.from}: ${msg.text}`);
   }
   else if (msg.type === "pong") {
     const ms = Date.now() - msg.t;
@@ -592,6 +686,17 @@ function attemptAutoAction(){
   }
   pendingURLAction = null;
 }
+
+/* -------------- Autoplay unlock for real browsers after refresh ---------- */
+function unlockAudioOnce(){
+  const tryPlay = () => {
+    remoteAudio.play().catch(()=>{});
+    audioEl.play().catch(()=>{}); // host side only
+  };
+  window.addEventListener("pointerdown", tryPlay, { once:true });
+  window.addEventListener("keydown", tryPlay, { once:true });
+}
+unlockAudioOnce();
 
 /* ----------------------------- Ping loop -------------------------------- */
 function pingLoop() {

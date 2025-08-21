@@ -163,7 +163,6 @@ wss.on("connection", (ws) => {
       safeSend(room.sockets.get(targetId), { type: "host:attach-all", peers: [...room.clients].filter(id => id !== targetId) });
       broadcast(rid, { type: "system", text: `Host transferred to ${nameOf(targetId)}` });
       broadcast(rid, { type: "presence:update", ...presencePayload(room) });
-      // also request the new host to share playlist snapshot
       safeSend(room.sockets.get(targetId), { type: "playlist:request-state" });
     }
 
@@ -181,6 +180,22 @@ wss.on("connection", (ws) => {
       const rid = inRoom.get(clientId);
       if (!rid) return;
       broadcast(rid, { type: "chat:new", from: nameOf(clientId), text: String(data.text || "").slice(0, 500) });
+    }
+
+    // ------------------ Re-sync (join-quality) -------------------
+    else if (data.type === "sync:reconnect-all") {
+      const rid = inRoom.get(clientId);
+      const room = rooms.get(rid);
+      if (!room || room.hostId !== clientId) return;
+      // tell the host client to rebuild connections to all peers
+      safeSend(ws, { type: "sync:host-reconnect-all" });
+    }
+    else if (data.type === "sync:request-reconnect") {
+      const rid = inRoom.get(clientId);
+      const room = rooms.get(rid);
+      if (!room || !room.hostId) return;
+      const hostSock = room.sockets.get(room.hostId);
+      if (hostSock) safeSend(hostSock, { type: "sync:host-reconnect-peer", peerId: clientId });
     }
 
     else if (data.type === "ping") {

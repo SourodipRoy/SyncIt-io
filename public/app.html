@@ -24,33 +24,34 @@
     <section class="grid-2">
       <!-- Left column: Host controls + Playlist -->
       <section class="stack gap">
-        <!-- HOST CONTROLS -->
         <section class="card host-panel hidden" id="hostPanel">
           <h2 class="card-title">Host Controls</h2>
-
-          <div class="host-body stack gap">
-            <!-- Choose Files button -->
-            <div class="host-upload">
-              <label for="fileInput" class="btn btn-accent host-choose">Choose Files</label>
-              <input type="file" id="fileInput" accept="audio/*" multiple class="visually-hidden" />
+          <div class="stack gap">
+            <!-- Choose files (visible button) -->
+            <div class="row gap wrap">
+              <button id="chooseBtn" class="btn btn-accent">Choose Files</button>
+              <input id="fileInput" class="hidden" type="file" accept="audio/*" multiple />
             </div>
 
-            <!-- Now Playing tile -->
-            <div class="nowplaying" id="nowPlaying">
-              <img src="/images/default-cover.png" alt="" class="np-cover" />
-              <div class="np-meta">
-                <div class="np-title" id="npTitle">No track selected</div>
-                <div class="np-artist" id="npArtist">Unknown Artist</div>
+            <!-- Now Playing (default cover + text) -->
+            <div class="np">
+              <img id="coverArt" src="/images/default-cover.png" alt="cover" />
+              <div class="meta">
+                <p class="title" id="trackTitle">No track selected</p>
+                <p class="artist" id="trackArtist"></p>
               </div>
             </div>
 
-            <!-- Seek + Time -->
-            <div class="host-seek row gap center">
+            <!-- Seek ABOVE the 3 buttons -->
+            <div class="row gap center">
               <input type="range" id="seek" min="0" max="100" value="0" />
-              <span class="time"><span id="curTime">0:00</span> / <span id="dur">0:00</span></span>
+              <span class="time" id="timeWrap">
+                <span id="curTime">0:00</span> / <span id="dur">0:00</span>
+              </span>
+              <span class="muted" id="noTrackMsg" style="display:none">No track selected</span>
             </div>
 
-            <!-- Playback controls -->
+            <!-- Three media buttons -->
             <div class="media-controls" role="group" aria-label="Playback controls">
               <button id="prevBtn" class="icon-circle" title="Previous" aria-label="Previous">
                 <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
@@ -71,14 +72,12 @@
               </button>
             </div>
 
-            <!-- Volume + Mute -->
-            <div class="host-volume row gap center">
+            <div class="row gap center">
               <label>Volume</label>
               <input type="range" id="volume" min="0" max="1" step="0.01" value="1" />
               <button id="muteBtn" class="icon-circle sm" title="Mute" aria-label="Mute"></button>
             </div>
 
-            <!-- Advanced host actions -->
             <div class="row gap wrap">
               <label>Transfer host</label>
               <select id="transferSelect"></select>
@@ -129,6 +128,12 @@
             <div>Participants</div><div id="clients">—</div>
             <div>RTT</div><div><span id="rtt">—</span> ms</div>
             <div>You</div><div id="me">—</div>
+          </div>
+
+          <!-- Sync actions -->
+          <div class="row gap" style="margin-top:10px; justify-content:flex-end">
+            <button id="syncAllBtn" class="btn btn-ghost" title="Force re-sync for everyone" style="display:none">Sync all</button>
+            <button id="resyncBtn" class="btn btn-ghost" title="Re-sync to host" style="display:none">Re-sync</button>
           </div>
         </section>
 
