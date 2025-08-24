@@ -1,5 +1,5 @@
 import express from "express";
-import { WebSocketServer } from "ws";
+import { WebSocketServer, WebSocket } from "ws";
 import { createServer } from "http";
 import { v4 as uuid } from "uuid";
 import path from "path";
@@ -35,7 +35,7 @@ function getRoom(roomId) {
   return rooms.get(roomId);
 }
 function safeSend(ws, obj) {
-  if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(obj));
+  if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj));
 }
 function broadcast(roomId, payload, exceptId = null) {
   const room = rooms.get(roomId);
