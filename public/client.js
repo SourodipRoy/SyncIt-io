@@ -18,6 +18,10 @@ let loopTrack = false;
 let loopList = false;
 let shuffleOn = false;
 
+// presence cache for admin selects
+let presenceClients = [];
+let presenceNames = {};
+
 // URL params for auto create/join
 let pendingURLAction = null;
 let displayName = "";
@@ -47,6 +51,8 @@ const transferSelect = $("transferSelect");
 const transferBtn = $("transferBtn");
 const kickSelect = $("kickSelect");
 const kickBtn = $("kickBtn");
+const banSelect = $("banSelect");
+const banBtn = $("banBtn");
 const remoteAudio = $("remoteAudio");
 
 // Now Playing UI
@@ -69,6 +75,20 @@ const plLoopOneBtn = $("plLoopOne");
 const plLoopAllBtn = $("plLoopAll");
 const plShuffleBtn = $("plShuffle");
 const plAddBtn = $("plAdd");
+
+// confirm modal
+const confirmModal = $("confirmModal");
+const confirmTitle = $("confirmTitle");
+const confirmText = $("confirmText");
+const confirmCancel = $("confirmCancel");
+const confirmOk = $("confirmOk");
+let pendingConfirm = null;
+
+// inline info modal (room page)
+const inlineInfoModal = $("inlineInfoModal");
+const inlineInfoTitle = $("inlineInfoTitle");
+const inlineInfoBody = $("inlineInfoBody");
+const inlineInfoOk = $("inlineInfoOk");
 
 // copy room id
 $("copyRoom")?.addEventListener("click", async () => {
@@ -107,13 +127,58 @@ function listParticipants(clients, hostId, names) {
 }
 function updatePresence(payload) {
   const { clients, hostId: hId, names } = payload;
+  const wasHost = isHost;
+  const prevHost = hostId;
   hostId = hId;
+  presenceClients = clients || [];
+  presenceNames = names || {};
   hostLabel.textContent = nameFrom(hostId, names);
   clientsLabel.textContent = listParticipants(clients, hostId, names);
+
+  // If we were host and host changed to someone else, drop host UI immediately and auto-resync
+  if (wasHost && hostId !== clientId) {
+    isHost = false;
+    hostPanel.classList.add("hidden");
+
+    // Close all sender PCs (we're no longer the broadcaster)
+    for (const [pid, obj] of peers.entries()) {
+      try { obj.pc.close(); } catch {}
+      peers.delete(pid);
+    }
+
+    // Become listener & request fast reconnect to new host
+    try { pc?.close(); } catch {}
+    pc = null;
+    try { remoteAudio.pause(); remoteAudio.srcObject = null; } catch {}
+    ws.send(JSON.stringify({ type: "sync:request-reconnect" }));
+  }
 
   // toggle sync buttons visibility
   if (syncAllBtn) syncAllBtn.style.display = isHost ? "" : "none";
   if (resyncBtn)  resyncBtn.style.display  = !isHost ? "" : "none";
+
+  // populate admin selects when host
+  if (isHost) populateAdminSelects();
+}
+
+function populateSelect(sel, options) {
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = "";
+  options.forEach(({ value, label }) => {
+    const opt = document.createElement("option");
+    opt.value = value; opt.textContent = label;
+    sel.appendChild(opt);
+  });
+  if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
+}
+
+function populateAdminSelects() {
+  const candidates = (presenceClients || []).filter(id => id !== hostId);
+  const opts = candidates.map(id => ({ value: id, label: nameFrom(id, presenceNames) }));
+  populateSelect(transferSelect, opts);
+  populateSelect(kickSelect, opts);
+  populateSelect(banSelect, opts);
 }
 
 // simple default-cover + author parsing from filename
@@ -136,9 +201,13 @@ function setNoTrackUI(){
 function setHasTrackUI(title, author){
   trackTitle.textContent = title || "Unknown Title";
   trackArtist.textContent = author || "Unknown author";
-  coverArt.src = "/images/default-cover.png"; // fallback
+  coverArt.src = "/images/default-cover.png";
   timeWrap.style.display = "";
   if (noTrackMsg) noTrackMsg.style.display = "none";
+}
+
+function supportsCapture() {
+  return !!(HTMLMediaElement.prototype.captureStream || HTMLMediaElement.prototype.mozCaptureStream);
 }
 
 /* ----------- HOST: captureStream management + negotiation -------------- */
@@ -183,7 +252,6 @@ async function ensureHostStreamAndSync() {
   }
 }
 async function hostCreateSenderFor(peerId) {
-  // in case of re-sync, drop old pc
   if (peers.has(peerId)) {
     try { peers.get(peerId).pc.close(); } catch {}
     peers.delete(peerId);
@@ -214,15 +282,15 @@ async function hostCreateSenderFor(peerId) {
   peers.get(peerId).negotiatedOnce = true;
 }
 async function hostAttachAll(peerIds) {
-  for (const pid of peerIds) {
-    try { await hostCreateSenderFor(pid); } catch (e) { console.error(e); }
-  }
+  const ids = Array.from(peerIds || []);
+  await Promise.all(ids.map(pid => hostCreateSenderFor(pid).catch(e => console.error(e))));
 }
 async function hostReconnectPeer(peerId) {
   try { await hostCreateSenderFor(peerId); } catch (e) { console.error(e); }
 }
-async function hostReconnectAll() {
-  for (const pid of peers.keys()) await hostReconnectPeer(pid);
+async function hostReconnectAll(ids = null) {
+  const list = ids ? Array.from(ids) : Array.from(peers.keys());
+  await Promise.all(list.map(pid => hostReconnectPeer(pid)));
 }
 
 /* ------------------------- LISTENER: single PC --------------------------- */
@@ -230,7 +298,6 @@ async function ensureListenerPC() {
   if (pc) return pc;
   pc = new RTCPeerConnection({ iceServers: [{ urls: ["stun:stun.l.google.com:19302"] }] });
   pc.ontrack = (e) => {
-    // Prefer tiny playout delay
     const recs = pc.getReceivers();
     if (recs[0] && "playoutDelayHint" in recs[0]) {
       try { recs[0].playoutDelayHint = 0.12; } catch {}
@@ -331,7 +398,6 @@ function renderPlaylist() {
   plLoopAllBtn.style.color = loopList ? "white" : "var(--muted)";
   plShuffleBtn.style.color = shuffleOn ? "white" : "var(--muted)";
 
-  // listeners cannot add; toggles are view-only
   if (isHost) {
     plAddBtn.style.display = "";
     plLoopOneBtn.classList.remove("disabled");
@@ -478,7 +544,18 @@ playPauseBtn.onclick = async () => {
 prevBtn.onclick = () => { if (!isHost) return; const i = prevIndex(); if (i !== -1) playIndex(i, true); };
 nextBtn.onclick = () => { if (!isHost) return; const i = nextIndex(); if (i !== -1) playIndex(i, true); };
 
-chooseBtn.onclick = () => { if (!isHost) return; fileInput.click(); };
+chooseBtn.onclick = () => {
+  if (!isHost) return;
+  if (!supportsCapture()) { alert("Your browser does not support captureStream on <audio>. Try latest Chrome/Firefox."); return; }
+  fileInput.click();
+};
+// Allow adding more files later via the Playlist "Add" button (multi or single)
+plAddBtn?.addEventListener("click", () => {
+  if (!isHost) return;
+  if (!supportsCapture()) { alert("Your browser does not support captureStream on <audio>. Try latest Chrome/Firefox."); return; }
+  fileInput.click();
+});
+
 fileInput.onchange = () => { if (isHost) addFilesToPlaylist(fileInput.files); fileInput.value = ""; };
 
 plLoopOneBtn.onclick = () => { if (!isHost) return; loopTrack = !loopTrack; renderPlaylist(); sendPlaylistState(); };
@@ -526,6 +603,69 @@ muteBtn.onclick = () => {
 };
 setMuteIcon();
 
+/* --------------------- Confirm modal helpers ---------------------------- */
+function openConfirm(action, targetId) {
+  if (!isHost) return;
+  const targetName = nameFrom(targetId, presenceNames);
+  pendingConfirm = { action, targetId, targetName };
+
+  if (action === "transfer") {
+    confirmTitle.textContent = "Transfer Host?";
+    confirmText.textContent = `Transfer host controls to ${targetName}? You will immediately lose host controls.`;
+  } else if (action === "kick") {
+    confirmTitle.textContent = "Kick Participant?";
+    confirmText.textContent = `Kick ${targetName} from the room? They can rejoin unless banned.`;
+  } else if (action === "ban") {
+    confirmTitle.textContent = "Ban Participant?";
+    confirmText.textContent = `Ban ${targetName} for the life of this room? They won't be able to rejoin until the room ends.`;
+  } else {
+    return;
+  }
+
+  confirmModal.setAttribute("aria-hidden","false");
+  confirmModal.classList.add("open");
+}
+function closeConfirm() {
+  confirmModal.setAttribute("aria-hidden","true");
+  confirmModal.classList.remove("open");
+  pendingConfirm = null;
+}
+confirmCancel?.addEventListener("click", closeConfirm);
+confirmModal?.addEventListener("click", (e) => {
+  if (e.target.dataset.close !== undefined || e.target.classList.contains("modal")) closeConfirm();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && confirmModal?.classList.contains("open")) closeConfirm();
+});
+confirmOk?.addEventListener("click", () => {
+  if (!pendingConfirm) return;
+  const { action, targetId } = pendingConfirm;
+  if (action === "transfer") ws.send(JSON.stringify({ type: "host:transfer", targetId }));
+  if (action === "kick")     ws.send(JSON.stringify({ type: "room:kick", targetId }));
+  if (action === "ban")      ws.send(JSON.stringify({ type: "room:ban", targetId }));
+  closeConfirm();
+});
+
+/* --------------------- Admin actions (open confirms) -------------------- */
+transferBtn?.addEventListener("click", () => {
+  if (!isHost) return;
+  const targetId = transferSelect?.value;
+  if (!targetId) return;
+  openConfirm("transfer", targetId);
+});
+kickBtn?.addEventListener("click", () => {
+  if (!isHost) return;
+  const targetId = kickSelect?.value;
+  if (!targetId) return;
+  openConfirm("kick", targetId);
+});
+banBtn?.addEventListener("click", () => {
+  if (!isHost) return;
+  const targetId = banSelect?.value;
+  if (!targetId) return;
+  openConfirm("ban", targetId);
+});
+
 /* --------------------- Re-sync buttons (re-join quality) ---------------- */
 if (syncAllBtn) {
   syncAllBtn.addEventListener("click", () => {
@@ -536,7 +676,6 @@ if (syncAllBtn) {
 if (resyncBtn) {
   resyncBtn.addEventListener("click", () => {
     if (isHost) return;
-    // kill local pc & audio; host will create a fresh offer
     try { pc?.close(); } catch {}
     pc = null;
     try { remoteAudio.pause(); remoteAudio.srcObject = null; } catch {}
@@ -566,7 +705,23 @@ ws.onmessage = async (ev) => {
     pingLoop();
   }
   else if (msg.type === "error") {
-    alert(msg.message);
+    const m = (msg.message || "").toLowerCase();
+    if (m.includes("banned")) {
+      // Show inline info modal on the room page, then redirect home to show inbuilt popup there too
+      inlineInfoTitle.textContent = "Banned from room";
+      inlineInfoBody.textContent = "You are banned from this room. You cannot rejoin until the room ends.";
+      const closeInline = () => {
+        inlineInfoModal.setAttribute("aria-hidden","true");
+        inlineInfoModal.classList.remove("open");
+        location.href = "/";
+      };
+      inlineInfoOk.onclick = closeInline;
+      inlineInfoModal.querySelectorAll("[data-close]")?.forEach(b => b.onclick = closeInline);
+      inlineInfoModal.setAttribute("aria-hidden","false");
+      inlineInfoModal.classList.add("open");
+    } else {
+      alert(msg.message);
+    }
   }
   else if (msg.type === "room:created") {
     roomId = msg.roomId; isHost = true;
@@ -636,9 +791,9 @@ ws.onmessage = async (ev) => {
     }
   }
   else if (msg.type === "playlist:state") {
-    if (isHost) return; // host is authoritative, ignore echo
+    if (isHost) return;
     const { list, currentIndex: idx, loopTrack: lt, loopList: ll, shuffle } = msg.state || {};
-    playlist = (list || []).map(x => ({ id: x.id, name: x.name })); // no URLs on listeners
+    playlist = (list || []).map(x => ({ id: x.id, name: x.name }));
     currentIndex = (typeof idx === "number" ? idx : -1);
     loopTrack = !!lt; loopList = !!ll; shuffleOn = !!shuffle;
     renderPlaylist();
@@ -653,17 +808,28 @@ ws.onmessage = async (ev) => {
     renderPlaylist(); setPlayPauseIcon(); setMuteIcon();
   }
   else if (msg.type === "host:attach-all") {
-    if (isHost) hostAttachAll(msg.peers || []);
+    if (isHost) await hostAttachAll(msg.peers || []);
   }
   else if (msg.type === "sync:host-reconnect-all") {
-    if (isHost) hostReconnectAll();
+    if (isHost) await hostReconnectAll(msg.peers || null);
   }
   else if (msg.type === "sync:host-reconnect-peer") {
-    if (isHost && msg.peerId) hostReconnectPeer(msg.peerId);
+    if (isHost && msg.peerId) await hostReconnectPeer(msg.peerId);
+  }
+  else if (msg.type === "sync:please-resync") {
+    if (!isHost) {
+      remoteAudio.pause();
+      setTimeout(() => remoteAudio.play().catch(()=>{}), 60);
+    }
   }
   else if (msg.type === "room:kicked") {
-    alert("You were kicked by the host.");
-    location.reload();
+    location.href = "/?msg=kicked";
+  }
+  else if (msg.type === "room:banned") {
+    location.href = "/?msg=banned";
+  }
+  else if (msg.type === "chat:new") {
+    logChat(`${msg.from}: ${msg.text}`);
   }
   else if (msg.type === "system") {
     logChat(`[system] ${msg.text}`);
@@ -691,7 +857,7 @@ function attemptAutoAction(){
 function unlockAudioOnce(){
   const tryPlay = () => {
     remoteAudio.play().catch(()=>{});
-    audioEl.play().catch(()=>{}); // host side only
+    audioEl.play().catch(()=>{});
   };
   window.addEventListener("pointerdown", tryPlay, { once:true });
   window.addEventListener("keydown", tryPlay, { once:true });

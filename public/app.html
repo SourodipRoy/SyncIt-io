@@ -88,6 +88,12 @@
               <select id="kickSelect"></select>
               <button id="kickBtn" class="btn btn-ghost">Kick</button>
             </div>
+            <!-- Ban UI (room-scoped, until room closes) -->
+            <div class="row gap wrap">
+              <label>Ban</label>
+              <select id="banSelect"></select>
+              <button id="banBtn" class="btn btn-ghost">Ban</button>
+            </div>
 
             <audio id="audio" crossorigin="anonymous" controls class="hidden"></audio>
           </div>
@@ -151,6 +157,37 @@
     <!-- Hidden listener audio -->
     <audio id="remoteAudio" autoplay playsinline class="hidden"></audio>
   </main>
+
+  <!-- Generic Confirm Modal -->
+  <div class="modal" id="confirmModal" aria-hidden="true">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="confirmTitle">
+      <div class="modal-head">
+        <h3 id="confirmTitle">Confirm Action</h3>
+        <button class="icon-btn" title="Close" aria-label="Close" data-close>✕</button>
+      </div>
+      <p id="confirmText" class="muted"></p>
+      <div class="row gap" style="justify-content:flex-end; margin-top:10px">
+        <button id="confirmCancel" class="btn btn-ghost">Cancel</button>
+        <button id="confirmOk" class="btn btn-accent">Confirm</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Inline Info Modal (for banned-attempt on the room page) -->
+  <div class="modal" id="inlineInfoModal" aria-hidden="true">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="inlineInfoTitle">
+      <div class="modal-head">
+        <h3 id="inlineInfoTitle">Notice</h3>
+        <button class="icon-btn" title="Close" aria-label="Close" data-close>✕</button>
+      </div>
+      <p id="inlineInfoBody" class="muted"></p>
+      <div class="row gap" style="justify-content:flex-end; margin-top:10px">
+        <button id="inlineInfoOk" class="btn btn-accent">OK</button>
+      </div>
+    </div>
+  </div>
 
   <script src="/client.js"></script>
 </body>

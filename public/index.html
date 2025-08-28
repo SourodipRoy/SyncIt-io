@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="utf-8" />
-  <title>SyncIt — Real-time Music Room</title>
+  <title>SyncIt.io — Synced Music Room</title>
   <meta name="google-site-verification" content="bINV2nekZAhCiSA0-m6KxlrL2JPVZuOzAefm7Wqely0" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="styles.css" />
@@ -98,7 +98,7 @@
     </div>
   </main>
 
-  <!-- Modal -->
+  <!-- Create/Join Modal -->
   <div class="modal" id="roomModal" aria-hidden="true">
     <div class="modal-backdrop" data-close></div>
     <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
@@ -151,6 +151,21 @@
           <button class="btn btn-accent" id="reviewEnter">Enter Room</button>
         </div>
         <small class="muted">Share this Room ID (and PIN if set) with others, then enter the room.</small>
+      </div>
+    </div>
+  </div>
+
+  <!-- Info Modal (used when redirected with ?msg=kicked|banned) -->
+  <div class="modal" id="infoModal" aria-hidden="true">
+    <div class="modal-backdrop" data-close></div>
+    <div class="modal-card" role="dialog" aria-modal="true" aria-labelledby="infoTitle">
+      <div class="modal-head">
+        <h3 id="infoTitle">Notice</h3>
+        <button class="icon-btn" title="Close" aria-label="Close" data-close>✕</button>
+      </div>
+      <p id="infoBody" class="muted"></p>
+      <div class="row gap" style="justify-content:flex-end; margin-top:10px">
+        <button id="infoOk" class="btn btn-accent">OK</button>
       </div>
     </div>
   </div>
@@ -274,6 +289,40 @@
 
     document.getElementById('year').textContent = new Date().getFullYear();
     setMode('create');
+
+    // Show info modal when redirected with ?msg=kicked|banned
+    (function(){
+      const u = new URL(location.href);
+      const m = (u.searchParams.get('msg') || '').toLowerCase();
+      if (!m) return;
+      const infoModal = document.getElementById('infoModal');
+      const infoTitle = document.getElementById('infoTitle');
+      const infoBody = document.getElementById('infoBody');
+      const infoOk = document.getElementById('infoOk');
+
+      if (m === 'kicked') {
+        infoTitle.textContent = 'Removed from room';
+        infoBody.textContent = 'You were kicked by the host.';
+      } else if (m === 'banned') {
+        infoTitle.textContent = 'Banned from room';
+        infoBody.textContent = 'You were banned by the host. You cannot rejoin until the room ends.';
+      } else {
+        return;
+      }
+
+      const openInfo = () => { infoModal.setAttribute('aria-hidden','false'); infoModal.classList.add('open'); };
+      const closeInfo = () => {
+        infoModal.setAttribute('aria-hidden','true'); infoModal.classList.remove('open');
+        u.searchParams.delete('msg');
+        history.replaceState(null, '', u.pathname + (u.search ? '?' + u.searchParams.toString() : '') + u.hash);
+      };
+
+      openInfo();
+      infoOk.addEventListener('click', closeInfo);
+      infoModal.querySelectorAll('[data-close]')?.forEach(btn => btn.addEventListener('click', closeInfo));
+      infoModal.addEventListener('click', (e) => { if (e.target.dataset.close !== undefined || e.target.classList.contains('modal')) closeInfo(); });
+      document.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeInfo(); });
+    })();
   </script>
 </body>
 </html>

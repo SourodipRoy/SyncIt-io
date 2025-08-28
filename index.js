@@ -18,11 +18,12 @@ app.get("/app", (_req, res) => {
 });
 
 /**
- * rooms = { [roomId]: { pin, hostId, clients:Set, sockets:Map } }
+ * rooms = { [roomId]: { pin, hostId, clients:Set, sockets:Map, bannedIPs:Set, bannedIds:Set } }
  */
 const rooms = new Map();
 const inRoom = new Map();   // clientId -> roomId
 const names = new Map();    // clientId -> display name
+const clientIp = new Map(); // clientId -> remote IP
 
 const safe = (s="") => String(s).slice(0, 48).replace(/[<>\n\r]/g, "");
 const shortId = (id="") => id.slice(0, 8);
@@ -30,7 +31,7 @@ const nameOf = (id) => (safe(names.get(id)) || `User-${shortId(id)}`);
 
 function getRoom(roomId) {
   if (!rooms.has(roomId)) {
-    rooms.set(roomId, { pin: null, hostId: null, clients: new Set(), sockets: new Map() });
+    rooms.set(roomId, { pin: null, hostId: null, clients: new Set(), sockets: new Map(), bannedIPs: new Set(), bannedIds: new Set() });
   }
   return rooms.get(roomId);
 }
@@ -59,6 +60,7 @@ function dropClient(clientId) {
   room.clients.delete(clientId);
   room.sockets.delete(clientId);
   inRoom.delete(clientId);
+  clientIp.delete(clientId);
 
   if (room.hostId === clientId) {
     room.hostId = [...room.clients][0] || null;
@@ -67,15 +69,26 @@ function dropClient(clientId) {
       safeSend(room.sockets.get(room.hostId), { type: "host:attach-all", peers: [...room.clients].filter(id => id !== room.hostId) });
       broadcast(roomId, { type: "system", text: `New host: ${nameOf(room.hostId)}` });
     } else {
-      broadcast(roomId, { type: "system", text: "Host left. Room idle." });
+      // no clients left = room ends; delete to lift bans & free memory
+      rooms.delete(roomId);
+      return;
     }
   }
 
-  broadcast(roomId, { type: "presence:update", ...presencePayload(room) });
+  // If room still exists, update presence
+  if (rooms.has(roomId)) {
+    broadcast(roomId, { type: "presence:update", ...presencePayload(room) });
+  }
 }
 
-wss.on("connection", (ws) => {
+wss.on("connection", (ws, req) => {
   const clientId = uuid();
+
+  // best-effort IP detection
+  const xfwd = (req?.headers["x-forwarded-for"] || "");
+  const ip = (Array.isArray(xfwd) ? xfwd[0] : String(xfwd)).split(",")[0].trim() || ws?._socket?.remoteAddress || "unknown";
+  clientIp.set(clientId, ip);
+
   safeSend(ws, { type: "hello", clientId });
 
   ws.on("message", (raw) => {
@@ -85,7 +98,7 @@ wss.on("connection", (ws) => {
     if (data.type === "profile:set") {
       names.set(clientId, safe(data.name || ""));
       const rid = inRoom.get(clientId);
-      if (rid) broadcast(rid, { type: "presence:update", ...presencePayload(rooms.get(rid)) });
+      if (rid && rooms.has(rid)) broadcast(rid, { type: "presence:update", ...presencePayload(rooms.get(rid)) });
       return;
     }
 
@@ -108,6 +121,9 @@ wss.on("connection", (ws) => {
       if (!rooms.has(roomId)) return safeSend(ws, { type: "error", message: "Room not found." });
 
       const room = rooms.get(roomId);
+      // enforce bans
+      const ipNow = clientIp.get(clientId) || "unknown";
+      if (room.bannedIPs.has(ipNow)) return safeSend(ws, { type: "error", message: "You are banned from this room." });
       if (room.pin && room.pin !== data.pin) return safeSend(ws, { type: "error", message: "Incorrect PIN." });
 
       room.clients.add(clientId);
@@ -119,7 +135,6 @@ wss.on("connection", (ws) => {
 
       if (room.hostId && room.hostId !== clientId) {
         safeSend(room.sockets.get(room.hostId), { type: "webrtc:new-peer", peerId: clientId });
-        // ask host to broadcast the latest playlist snapshot
         safeSend(room.sockets.get(room.hostId), { type: "playlist:request-state" });
       }
       broadcast(roomId, { type: "system", text: `${nameOf(clientId)} joined.` });
@@ -128,7 +143,7 @@ wss.on("connection", (ws) => {
     else if (data.type === "webrtc:signal") {
       const { targetId, payload } = data;
       const rid = inRoom.get(clientId);
-      if (!rid) return;
+      if (!rid || !rooms.has(rid)) return;
       const room = rooms.get(rid);
       const target = room?.sockets.get(targetId);
       if (target) safeSend(target, { type: "webrtc:signal", fromId: clientId, payload });
@@ -147,7 +162,7 @@ wss.on("connection", (ws) => {
     else if (data.type === "playlist:state") {
       const rid = inRoom.get(clientId);
       const room = rooms.get(rid);
-      if (room?.hostId !== clientId) return; // only host can update state
+      if (room?.hostId !== clientId) return;
       broadcast(rid, { type: "playlist:state", state: data.state }, clientId);
     }
 
@@ -171,14 +186,33 @@ wss.on("connection", (ws) => {
       const room = rooms.get(rid);
       if (!room || room.hostId !== clientId) return;
       const targetId = data.targetId;
+      if (!room.clients.has(targetId)) return;
       const sock = room.sockets.get(targetId);
       if (sock) safeSend(sock, { type: "room:kicked" });
       if (sock) sock.close(1000, "Kicked");
     }
 
+    // Ban for the lifetime of the room (by IP + current clientId)
+    else if (data.type === "room:ban") {
+      const rid = inRoom.get(clientId);
+      const room = rooms.get(rid);
+      if (!room || room.hostId !== clientId) return;
+      const targetId = data.targetId;
+      if (!room.clients.has(targetId)) return;
+
+      const sock = room.sockets.get(targetId);
+      const ipToBan = clientIp.get(targetId) || "unknown";
+      room.bannedIPs.add(ipToBan);
+      room.bannedIds.add(targetId);
+
+      if (sock) safeSend(sock, { type: "room:banned" });
+      if (sock) sock.close(1000, "Banned");
+      broadcast(rid, { type: "system", text: `${nameOf(targetId)} was banned by the host.` }, targetId);
+    }
+
     else if (data.type === "chat:send") {
       const rid = inRoom.get(clientId);
-      if (!rid) return;
+      if (!rid || !rooms.has(rid)) return;
       broadcast(rid, { type: "chat:new", from: nameOf(clientId), text: String(data.text || "").slice(0, 500) });
     }
 
@@ -187,8 +221,11 @@ wss.on("connection", (ws) => {
       const rid = inRoom.get(clientId);
       const room = rooms.get(rid);
       if (!room || room.hostId !== clientId) return;
-      // tell the host client to rebuild connections to all peers
-      safeSend(ws, { type: "sync:host-reconnect-all" });
+      // Ask host to rebuild connections to ALL current peers quickly (send list)
+      const peers = [...room.clients].filter(id => id !== clientId);
+      safeSend(ws, { type: "sync:host-reconnect-all", peers });
+      // Nudge listeners to resume playback after renegotiation
+      broadcast(rid, { type: "sync:please-resync" }, clientId);
     }
     else if (data.type === "sync:request-reconnect") {
       const rid = inRoom.get(clientId);
