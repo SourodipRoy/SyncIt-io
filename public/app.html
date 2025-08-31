@@ -78,20 +78,15 @@
               <button id="muteBtn" class="icon-circle sm" title="Mute" aria-label="Mute"></button>
             </div>
 
-            <div class="row gap wrap">
-              <label>Transfer host</label>
-              <select id="transferSelect"></select>
-              <button id="transferBtn" class="btn">Transfer</button>
+            <!-- Single admin select + action buttons (Transfer / Kick / Ban) -->
+            <div class="row gap wrap" style="align-items:center">
+              <label style="min-width:80px">Participant</label>
+              <select id="adminSelect" style="min-width:220px"></select>
             </div>
-            <div class="row gap wrap">
-              <label>Kick</label>
-              <select id="kickSelect"></select>
+
+            <div class="row gap" style="margin-top:6px">
+              <button id="transferBtn" class="btn">Transfer Host</button>
               <button id="kickBtn" class="btn btn-ghost">Kick</button>
-            </div>
-            <!-- Ban UI (room-scoped, until room closes) -->
-            <div class="row gap wrap">
-              <label>Ban</label>
-              <select id="banSelect"></select>
               <button id="banBtn" class="btn btn-ghost">Ban</button>
             </div>
 

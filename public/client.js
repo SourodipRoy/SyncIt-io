@@ -115,7 +115,7 @@ function fmtTime(s) {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 function nameFrom(id, names) {
-  return (names && names[id]) || (id ? `User-${id.slice(0,8)}` : "—");
+  return (names && names[id]) || (id ? `User-${id.slice(0,8)}` : "â");
 }
 function listParticipants(clients, hostId, names) {
   return (clients || []).map(id => {
@@ -217,12 +217,8 @@ function getCaptureStream() {
        : null;
 }
 async function ensureHostStreamAndSync() {
-  const cap = getCaptureStream();
-  if (!cap) {
-    alert("Your browser does not support captureStream on <audio>. Try latest Chrome/Firefox.");
-    throw new Error("captureStream unsupported");
-  }
-  stream = cap;
+  // *** CHANGE: This function no longer captures the stream. It just syncs the track. ***
+  if (!stream) return; // Can't sync if we have no stream yet
 
   const newTrack = stream.getAudioTracks()[0] || null;
   if (!newTrack) return;
@@ -230,6 +226,7 @@ async function ensureHostStreamAndSync() {
   const trackChanged = currentTrack !== newTrack;
   currentTrack = newTrack;
 
+  // This loop is now safe because it uses the single, stable 'currentTrack'
   for (const [peerId, obj] of peers.entries()) {
     const pcHost = obj.pc;
     try {
@@ -266,16 +263,12 @@ async function hostCreateSenderFor(peerId) {
     }
   };
 
-  const cap = getCaptureStream();
-  if (cap) {
-    stream = cap;
-    const tr = stream.getAudioTracks()[0];
-    if (tr) {
-      currentTrack = tr;
-      pcHost.addTrack(tr, stream);
-    }
+  // *** CHANGE: Use the EXISTING stream and track, don't create a new one. ***
+  if (stream && currentTrack) {
+    pcHost.addTrack(currentTrack, stream);
   }
 
+  // The rest of the negotiation logic remains the same
   const offer = await pcHost.createOffer({ offerToReceiveAudio: false });
   await pcHost.setLocalDescription(offer);
   ws.send(JSON.stringify({ type: "webrtc:signal", targetId: peerId, payload: { kind: "offer", sdp: offer } }));
@@ -521,7 +514,19 @@ function loadCurrentAndPlay(autoplay) {
   audioEl.src = item.url;
   const once = () => {
     audioEl.removeEventListener("loadedmetadata", once);
+
+    // *** CHANGE: Capture the stream HERE and only here. ***
+    const cap = getCaptureStream();
+    if (!cap) {
+      alert("Your browser does not support captureStream on <audio>. Try latest Chrome/Firefox.");
+      return;
+    }
+    stream = cap; // Set the global stream
+    //currentTrack = stream.getAudioTracks()[0]; // Set the global track (COMMENTED - TO FIX EDGE CASE)
+
+    // Now sync this new track to all connected peers
     ensureHostStreamAndSync().catch(console.error);
+
     if (autoplay) audioEl.play().catch(()=>{});
     setPlayPauseIcon();
   };
@@ -713,7 +718,7 @@ ws.onmessage = async (ev) => {
       const closeInline = () => {
         inlineInfoModal.setAttribute("aria-hidden","true");
         inlineInfoModal.classList.remove("open");
-        location.href = "/";
+        location.href = "/?msg=banned";
       };
       inlineInfoOk.onclick = closeInline;
       inlineInfoModal.querySelectorAll("[data-close]")?.forEach(b => b.onclick = closeInline);
