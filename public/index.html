@@ -14,7 +14,7 @@
   <meta property="og:type" content="website" />
   <meta name="twitter:card" content="summary_large_image" />
   <meta name="twitter:title" content="SyncIt — Real-time Music Room" />
-  <meta name="twitter:description" content="Create a room, share a 6-digit code, and sync music across phones, tablets, and computers with sub-100ms precision." />
+  <meta name="twitter:description" content="Create a room, share a 6-digit code, and transform phones, tablets, and computers into a synchronized speaker network with sub-100ms precision." />
   <meta name="twitter:image" content="https://syncit-io.onrender.com/images/logo.png" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <link rel="stylesheet" href="styles.css" />
@@ -49,6 +49,11 @@
       </div>
 
       <div class="mini-note">Developer: Sourodip Roy AKA Equilibrium.dev 🎀</div>
+
+      <!-- Features Heading (left-aligned with dash) -->
+      <div class="section-header">
+        <h2 class="section-title"><span class="dash">—</span><span class="section-text">Features</span></h2>
+      </div>
 
       <!-- Features -->
       <section id="features" class="features">
@@ -107,6 +112,57 @@
           <p>Participants can mute locally without affecting the room stream.</p>
         </div>
       </section>
+
+      <!-- How it works Heading (left-aligned with dash) -->
+      <div class="section-header" style="margin-top:28px">
+        <h2 class="section-title"><span class="dash">—</span><span class="section-text">How it works</span></h2>
+      </div>
+
+      <!-- How it works -->
+      <section id="how" class="how">
+        <div class="how-inner">
+          <div class="how-step">
+            <div class="step-num">1</div>
+            <div class="step-body">
+              <h4>Create or Join a Room</h4>
+              <p>Host generates a 6-digit Room ID (and optional PIN). Share the code — listeners join via the app or URL. Host becomes the authoritative timing source for the session.</p>
+            </div>
+          </div>
+
+          <div class="how-step">
+            <div class="step-num">2</div>
+            <div class="step-body">
+              <h4>Shared Media Source</h4>
+              <p>The host provides a single shared media timeline (audio buffer or stream). All clients subscribe to that timeline instead of playing local files independently.</p>
+            </div>
+          </div>
+
+          <div class="how-step">
+            <div class="step-num">3</div>
+            <div class="step-body">
+              <h4>Time Beacons & Drift Compensation</h4>
+              <p>Clients receive periodic time beacons and exchange lightweight timing messages. Each client measures local playback offset and applies drift compensation so playback remains aligned (&lt;100ms).</p>
+            </div>
+          </div>
+
+          <div class="how-step">
+            <div class="step-num">4</div>
+            <div class="step-body">
+              <h4>Reliable Controls</h4>
+              <p>Play, pause, seek and playlist changes are published by the host. Listeners apply these commands deterministically against the shared timeline to stay in perfect sync.</p>
+            </div>
+          </div>
+
+          <div class="how-step">
+            <div class="step-num">5</div>
+            <div class="step-body">
+              <h4>Scale & Resilience</h4>
+              <p>Supports SFU for larger rooms and peer-to-peer data channels for smaller groups. Reconnect, host transfer, and local mute keep the experience robust on flaky networks.</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
     </div>
   </main>
 

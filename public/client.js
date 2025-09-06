@@ -55,6 +55,9 @@ const banSelect = $("banSelect");
 const banBtn = $("banBtn");
 const remoteAudio = $("remoteAudio");
 
+// ADDED: reference to the single consolidated admin select in your HTML
+const adminSelect = $("adminSelect");
+
 // Now Playing UI
 const coverArt = $("coverArt");
 const trackTitle = $("trackTitle");
@@ -115,7 +118,7 @@ function fmtTime(s) {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 function nameFrom(id, names) {
-  return (names && names[id]) || (id ? `User-${id.slice(0,8)}` : "â");
+  return (names && names[id]) || (id ? `User-${id.slice(0,8)}` : "—");
 }
 function listParticipants(clients, hostId, names) {
   return (clients || []).map(id => {
@@ -130,10 +133,27 @@ function updatePresence(payload) {
   const wasHost = isHost;
   const prevHost = hostId;
   hostId = hId;
-  presenceClients = clients || [];
-  presenceNames = names || {};
-  hostLabel.textContent = nameFrom(hostId, names);
-  clientsLabel.textContent = listParticipants(clients, hostId, names);
+
+  // Normalize clients array: accept either ["id1","id2"] or [{id, name}, ...]
+  const rawClients = clients || [];
+  const normalizedClients = [];
+  const normalizedNames = Object.assign({}, names || {});
+
+  rawClients.forEach(c => {
+    if (typeof c === "string") {
+      normalizedClients.push(c);
+    } else if (c && (c.id || c.clientId || c.userId)) {
+      const id = c.id || c.clientId || c.userId;
+      normalizedClients.push(id);
+      if (c.name && !normalizedNames[id]) normalizedNames[id] = c.name;
+    }
+  });
+
+  presenceClients = normalizedClients;
+  presenceNames = normalizedNames;
+
+  hostLabel.textContent = nameFrom(hostId, presenceNames);
+  clientsLabel.textContent = listParticipants(presenceClients, hostId, presenceNames);
 
   // If we were host and host changed to someone else, drop host UI immediately and auto-resync
   if (wasHost && hostId !== clientId) {
@@ -147,10 +167,10 @@ function updatePresence(payload) {
     }
 
     // Become listener & request fast reconnect to new host
-    try { pc?.close(); } catch {}
+    try { if (pc) pc.close(); } catch {}
     pc = null;
-    try { remoteAudio.pause(); remoteAudio.srcObject = null; } catch {}
-    ws.send(JSON.stringify({ type: "sync:request-reconnect" }));
+    try { if (remoteAudio) { remoteAudio.pause(); remoteAudio.srcObject = null; } } catch {}
+    try { ws.send(JSON.stringify({ type: "sync:request-reconnect" })); } catch {}
   }
 
   // toggle sync buttons visibility
@@ -165,20 +185,54 @@ function populateSelect(sel, options) {
   if (!sel) return;
   const prev = sel.value;
   sel.innerHTML = "";
-  options.forEach(({ value, label }) => {
+
+  // placeholder so select never appears empty
+  const placeholder = document.createElement("option");
+  placeholder.value = "";
+  placeholder.textContent = options && options.length ? "Select participant" : "No participants";
+  placeholder.disabled = true;
+  placeholder.selected = true;
+  sel.appendChild(placeholder);
+
+  (options || []).forEach(({ value, label }) => {
     const opt = document.createElement("option");
-    opt.value = value; opt.textContent = label;
+    opt.value = value;
+    opt.textContent = label;
     sel.appendChild(opt);
   });
+
   if (prev && [...sel.options].some(o => o.value === prev)) sel.value = prev;
 }
 
 function populateAdminSelects() {
   const candidates = (presenceClients || []).filter(id => id !== hostId);
   const opts = candidates.map(id => ({ value: id, label: nameFrom(id, presenceNames) }));
-  populateSelect(transferSelect, opts);
-  populateSelect(kickSelect, opts);
-  populateSelect(banSelect, opts);
+
+  // Primary: populate the single admin select that exists in your HTML
+  const admin = document.getElementById('adminSelect');
+  if (admin) populateSelect(admin, opts);
+
+  // Backwards compatibility: if the older separate selects exist, populate them too
+  try { if (typeof transferSelect !== 'undefined' && transferSelect) populateSelect(transferSelect, opts); } catch(e){}
+  try { if (typeof kickSelect !== 'undefined' && kickSelect) populateSelect(kickSelect, opts); } catch(e){}
+  try { if (typeof banSelect !== 'undefined' && banSelect) populateSelect(banSelect, opts); } catch(e){}
+}
+
+// Helper: return the selected participant id from the UI.
+// Prefers the single adminSelect in HTML, falls back to legacy individual selects.
+function getSelectedAdminId() {
+  if (adminSelect && adminSelect.value && adminSelect.value.trim() !== "") return adminSelect.value.trim();
+  if (transferSelect && transferSelect.value && transferSelect.value.trim() !== "") return transferSelect.value.trim();
+  if (kickSelect && kickSelect.value && kickSelect.value.trim() !== "") return kickSelect.value.trim();
+  if (banSelect && banSelect.value && banSelect.value.trim() !== "") return banSelect.value.trim();
+
+  if (hostPanel) {
+    const sels = hostPanel.querySelectorAll("select");
+    for (const s of sels) {
+      if (s && s.value && s.value.trim() !== "") return s.value.trim();
+    }
+  }
+  return null;
 }
 
 // simple default-cover + author parsing from filename
@@ -652,21 +706,22 @@ confirmOk?.addEventListener("click", () => {
 });
 
 /* --------------------- Admin actions (open confirms) -------------------- */
+// REPLACED: handlers now use the single adminSelect (with fallbacks to legacy selects)
 transferBtn?.addEventListener("click", () => {
   if (!isHost) return;
-  const targetId = transferSelect?.value;
+  const targetId = getSelectedAdminId();
   if (!targetId) return;
   openConfirm("transfer", targetId);
 });
 kickBtn?.addEventListener("click", () => {
   if (!isHost) return;
-  const targetId = kickSelect?.value;
+  const targetId = getSelectedAdminId();
   if (!targetId) return;
   openConfirm("kick", targetId);
 });
 banBtn?.addEventListener("click", () => {
   if (!isHost) return;
-  const targetId = banSelect?.value;
+  const targetId = getSelectedAdminId();
   if (!targetId) return;
   openConfirm("ban", targetId);
 });
@@ -718,7 +773,7 @@ ws.onmessage = async (ev) => {
       const closeInline = () => {
         inlineInfoModal.setAttribute("aria-hidden","true");
         inlineInfoModal.classList.remove("open");
-        location.href = "/?msg=banned";
+        location.href = "/";
       };
       inlineInfoOk.onclick = closeInline;
       inlineInfoModal.querySelectorAll("[data-close]")?.forEach(b => b.onclick = closeInline);
